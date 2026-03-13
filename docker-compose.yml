@@ -1,0 +1,13 @@
+services:
+  db:
+    image: ankane/pgvector:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: job_match
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"

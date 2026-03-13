@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>SmartJob AI V8.5</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style type="text/tailwindcss">
+        @layer components {
+            .filter-checkbox {
+                @apply rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-500 transition-all cursor-pointer;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white p-4 md:p-8">
+    <div class="max-w-4xl mx-auto">
+        <header class="mb-12 flex justify-between items-end border-b border-gray-800 pb-8">
+            <div>
+                <h1 id="ui-title" class="text-4xl font-black text-blue-500 italic uppercase">Smart Job AI</h1>
+                <p id="ui-subtitle" class="text-gray-500 text-[10px] font-bold uppercase tracking-widest mt-1">North America Career Matcher</p>
+            </div>
+            <div class="flex flex-col items-end gap-3">
+                <select id="langSelect" onchange="handleLanguageChange()" class="bg-gray-800 border border-gray-700 rounded-lg text-[10px] px-2 py-1 text-blue-400 font-bold outline-none">
+                    <option value="ko">KOREAN (한국어)</option>
+                    <option value="en">ENGLISH (영어)</option>
+                </select>
+                <div class="text-right">
+                    <div id="totalJobs" class="text-3xl font-black text-white italic">---</div>
+                    <div id="ui-stats-label" class="text-[10px] text-gray-500 font-bold uppercase">Jobs in Database</div>
+                </div>
+            </div>
+        </header>
+
+        <section class="bg-gray-800 p-8 rounded-3xl mb-12 border border-gray-700 shadow-2xl">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <input type="text" id="jobKeyword" placeholder="Target Role" class="bg-gray-900 border border-gray-700 rounded-2xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select id="locationInput" class="bg-gray-900 border border-gray-700 rounded-2xl p-4 text-white">
+                    <option id="opt-loc-all" value="North America">All North America</option>
+                    <option value="Vancouver, BC">Vancouver, BC</option>
+                    <option value="Toronto, ON">Toronto, ON</option>
+                    <option value="Montreal, QC">Montreal, QC</option>
+                    <option value="Seattle, WA">Seattle, WA</option>
+                    <option value="San Francisco, CA">San Francisco, CA</option>
+                    <option value="Los Angeles, CA">Los Angeles, CA</option>
+                    <option value="Austin, TX">Austin, TX</option>
+                    <option value="New York, NY">New York, NY</option>
+                </select>
+            </div>
+
+            <div class="mb-6">
+                <button onclick="document.getElementById('advancedFilters').classList.toggle('hidden')" class="text-blue-400 text-xs font-black uppercase flex items-center gap-2 hover:text-blue-300">
+                    <i class="fa-solid fa-sliders"></i> <span id="ui-filter-toggle">Advanced Filters (Level, Type, Skills)</span>
+                </button>
+                <div id="advancedFilters" class="hidden mt-4 p-6 bg-gray-900/50 rounded-2xl border border-gray-700 grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div>
+                        <p id="ui-label-exp" class="text-[10px] text-gray-500 font-black mb-3 uppercase">Experience Level</p>
+                        <div class="flex flex-col gap-2">
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="level" value="Entry" class="filter-checkbox"> <span id="opt-exp-entry">Entry Level</span></label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="level" value="Junior" class="filter-checkbox" checked> <span id="opt-exp-junior">Junior</span></label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="level" value="Mid" class="filter-checkbox"> <span id="opt-exp-mid">Mid/Senior</span></label>
+                        </div>
+                    </div>
+                    <div>
+                        <p id="ui-label-type" class="text-[10px] text-gray-500 font-black mb-3 uppercase">Employment Type</p>
+                        <div class="flex flex-col gap-2">
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="type" value="Full-time" class="filter-checkbox" checked> <span id="opt-type-full">Full-time</span></label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="type" value="Internship" class="filter-checkbox"> <span id="opt-type-intern">Internship</span></label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="type" value="Contract" class="filter-checkbox"> <span id="opt-type-contract">Contract</span></label>
+                        </div>
+                    </div>
+                    <div>
+                        <p id="ui-label-skills" class="text-[10px] text-gray-500 font-black mb-3 uppercase">Key Skills (Weighted)</p>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="skill" value="Python" class="filter-checkbox"> Python</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="skill" value="C++" class="filter-checkbox"> C++</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="skill" value="Java" class="filter-checkbox"> Java</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="skill" value="React" class="filter-checkbox"> React</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" name="skill" value="AWS" class="filter-checkbox"> AWS</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <label id="ui-resume-label" class="block text-[10px] font-black text-gray-500 uppercase mb-2 ml-1">Upload Your Resume (PDF)</label>
+            <div class="flex items-center gap-4 mb-8">
+                <label for="resumeFile" id="btn-file-custom" class="bg-blue-600 hover:bg-blue-700 py-2 px-6 rounded-full text-sm font-black text-white cursor-pointer transition-all uppercase whitespace-nowrap">Choose File</label>
+                <span id="file-name-display" class="text-xs text-gray-500 font-medium truncate italic">No file chosen</span>
+                <input type="file" id="resumeFile" accept=".pdf" class="hidden" onchange="handleFileSelect()">
+            </div>
+            
+            <button onclick="processAll()" id="processBtn" class="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-2xl font-black w-full text-lg shadow-lg uppercase transition-all transform active:scale-[0.98]">START AI ANALYSIS</button>
+            <div id="status" class="mt-4 text-xs text-yellow-500 hidden font-mono italic animate-bounce text-center">>> ANALYZING...</div>
+        </section>
+
+        <section id="resultSection" class="hidden">
+            <h2 id="ui-result-title" class="text-sm font-black mb-6 text-blue-400 uppercase tracking-widest border-l-4 border-blue-500 pl-4">AI Recommended Matches</h2>
+            <div id="matchList" class="space-y-4"></div>
+        </section>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

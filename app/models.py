@@ -3,6 +3,7 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from .database import Base
+from sqlalchemy.sql import func
 
 class JobPosting(Base):
     __tablename__ = "job_postings"
@@ -21,7 +22,7 @@ class JobPosting(Base):
     skills = Column(Text)
 
     # 🆕 데이터 관리를 위한 수집 일시 추가
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, server_default=func.now())
 
     # 🚀 바로 이 부분이 "HNSW 인덱싱"을 실제로 생성하는 핵심 코드입니다.
     # 현재 단계에서는 크롤링된 공고가 많지 않아 큰 문제가 없지만, 차후 실제 서비스가

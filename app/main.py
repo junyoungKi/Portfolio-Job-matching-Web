@@ -1,107 +1,112 @@
 # app/main.py
 import sys, asyncio, os, shutil, time, json, redis, hashlib
+import aiofiles
+import uuid # 🎯 고유 식별자 생성을 위해 상단에 추가되어야 합니다.
 from datetime import datetime, timedelta
 from typing import List, Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, text  # 🎯 text 임포트 추가
+
+# 🎯 비동기 쿼리를 위한 최신 SQLAlchemy 2.0 모듈 임포트
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, desc, or_, text, func
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .database import engine, get_db, SessionLocal
+# database.py에서 비동기 세션과 엔진을 가져옵니다.
+from .database import engine, get_db, AsyncSessionLocal
 from . import models
 from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
 
-# 🎯 Python 3.14+ 대응: WindowsProactorEventLoopPolicy 경고 코드를 삭제했습니다.
-
-# 🎯 [데이터베이스 초기화] pgvector 확장 활성화 및 테이블 생성
-def init_db():
-    with engine.connect() as conn:
-        # pgvector 확장이 설치되어 있지 않으면 설치합니다.
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    # 테이블 생성
-    models.Base.metadata.create_all(bind=engine)
-
-init_db()
-
-# Redis 연결
+# Redis 연결 (유지)
 try:
     rd = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
     print("✅ Redis 연결 성공")
 except:
     rd = None
 
-# [JOB 1] 정기 공고 수집 작업
+# [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 적용)
+# [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 + 일괄 수집 방식)
 async def scheduled_north_america_crawl():
-    db = SessionLocal()
-    try:
-        print(f"⏰ [BATCH] 정기 수집 및 AI 태깅 시작: {datetime.now()}")
-        target_keywords = ["Software Engineer"]
-        for kw in target_keywords:
-            for city in job_collector.NA_HUBS:
-                jobs = await job_collector.scrape_linkedin(kw, city)
-                for job in jobs:
-                    exists = db.query(models.JobPosting).filter(
-                        models.JobPosting.title == job['title'], 
-                        models.JobPosting.company == job['company']
-                    ).first()
+    # SessionLocal() 대신 AsyncSessionLocal()을 비동기 컨텍스트로 엽니다.
+    async with AsyncSessionLocal() as db:
+        try:
+            print(f"⏰ [BATCH] 정기 수집 및 AI 태깅 시작: {datetime.now()}")
+            target_keywords = ["Software Engineer"]
+            for kw in target_keywords:
+                for city in job_collector.NA_HUBS:
                     
-                    if not exists:
-                        meta = await ai_service.extract_job_metadata(job['description'])
-                        job_emb = await ai_service.get_embedding(job['description'])
-                        
-                        db.add(models.JobPosting(
-                            title=job['title'], 
-                            company=job['company'], 
-                            description=job['description'], 
-                            location=job['location'], 
-                            salary=job['salary'], 
-                            search_keyword=kw, 
-                            embedding=job_emb,
-                            employment_type=meta.get('employment_type', 'Full-time'),
-                            experience_level=meta.get('experience_level', 'Junior'),
-                            skills=", ".join(meta.get('skills', []))
-                        ))
-                db.commit()
-    except Exception as e: 
-        print(f"❌ [BATCH] 오류: {e}")
-    finally: 
-        db.close()
+                    # 🎯 수정된 부분 1: async for 대신 await를 사용하여 리스트를 한 번에 받아옵니다.
+                    jobs = await job_collector.scrape_linkedin(kw, city)
+                    
+                    # 🎯 수정된 부분 2: 받아온 리스트(jobs)를 일반 for문으로 하나씩 꺼내어 처리합니다.
+                    for job in jobs:
+                        try:
+                            # 비동기 쿼리 문법: select() 생성 후 await db.execute() 실행
+                            stmt = select(models.JobPosting).filter(
+                                models.JobPosting.title == job['title'], 
+                                models.JobPosting.company == job['company']
+                            )
+                            result = await db.execute(stmt)
+                            exists = result.scalars().first() # 첫 번째 결과값 가져오기
+                            
+                            if not exists:
+                                meta = await ai_service.extract_job_metadata(job['description'])
+                                job_emb = await ai_service.get_embedding(job['description'])
+                                
+                                new_posting = models.JobPosting(
+                                    title=job['title'], company=job['company'], 
+                                    description=job['description'], location=job['location'], 
+                                    salary=job['salary'], search_keyword=kw, embedding=job_emb,
+                                    employment_type=meta.get('employment_type', 'Full-time'),
+                                    experience_level=meta.get('experience_level', 'Junior'),
+                                    skills=", ".join(meta.get('skills', []))
+                                )
+                                db.add(new_posting)
+                                await db.commit() # 저장 시에도 await 필수
+                                print(f"✅ DB 저장 완료: {job['title']} @ {job['company']}")
+                            else:
+                                print(f"⏭️ 스킵 (중복): {job['title']} @ {job['company']}")
+                        except Exception as inner_e:
+                            await db.rollback() # 롤백 시에도 await 필수
+                            print(f"⚠️ 개별 공고 처리 실패: {inner_e}")
+                            continue
+        except Exception as e: 
+            print(f"❌ [BATCH] 전체 오류: {e}")
 
-# [JOB 2] 오래된 공고 자동 삭제 (데이터 생명주기 관리)
+# [JOB 2] 오래된 공고 자동 삭제
 async def cleanup_old_jobs():
-    db = SessionLocal()
-    try:
-        expiry_date = datetime.now() - timedelta(days=30)
-        deleted_count = db.query(models.JobPosting).filter(
-            models.JobPosting.company != "USER_UPLOAD",
-            models.JobPosting.created_at < expiry_date
-        ).delete()
-        
-        db.commit()
-        if deleted_count > 0:
-            print(f"🧹 [CLEANUP] 30일 경과된 오래된 공고 {deleted_count}개 자동 삭제 완료")
-    except Exception as e:
-        print(f"❌ [CLEANUP] 오류 발생: {e}")
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as db:
+        try:
+            expiry_date = datetime.now() - timedelta(days=30)
+            # 🎯 비동기 삭제(Delete) 쿼리 문법
+            stmt = delete(models.JobPosting).filter(
+                models.JobPosting.company != "USER_UPLOAD",
+                models.JobPosting.created_at < expiry_date
+            )
+            result = await db.execute(stmt)
+            await db.commit()
+            
+            if result.rowcount > 0:
+                print(f"🧹 [CLEANUP] 오래된 공고 {result.rowcount}개 삭제 완료")
+        except Exception as e:
+            await db.rollback()
+            print(f"❌ [CLEANUP] 오류 발생: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 🎯 DB 테이블 비동기 초기화 (기존 밖에서 돌던 init_db를 내부로 편입하여 안전성 확보)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.run_sync(models.Base.metadata.create_all)
+        print("✅ 데이터베이스 테이블 로드 완료")
+
     scheduler = AsyncIOScheduler()
-    
-    # 1. 6시간마다 공고 수집
-    scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, 
-                      next_run_time=datetime.now() + timedelta(seconds=5))
-    
-    # 2. 매일 자정(00:00)에 데이터 청소 실행
+    scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
     scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
-    
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -110,50 +115,86 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/stats")
-async def get_stats(db: Session = Depends(get_db)):
-    total = db.query(models.JobPosting).filter(models.JobPosting.company != "USER_UPLOAD").count()
+async def get_stats(db: AsyncSession = Depends(get_db)):
+    # 🎯 비동기 카운트(Count) 쿼리 문법
+    stmt = select(func.count(models.JobPosting.id)).filter(models.JobPosting.company != "USER_UPLOAD")
+    result = await db.execute(stmt)
+    total = result.scalar()
     return {"total_jobs": total}
 
+# 이력서 처리 엔드포인트 수정 (완전 수정본)
 @app.post("/process-resume")
-async def process_resume(file: UploadFile = File(...), keyword: str = Query(...), location: str = Query(...), db: Session = Depends(get_db)):
+async def process_resume(
+    file: UploadFile = File(...), 
+    keyword: str = Form(...), 
+    location: str = Form(...), 
+    db: AsyncSession = Depends(get_db)
+):
     os.makedirs("temp_uploads", exist_ok=True)
-    file_path = os.path.join("temp_uploads", file.filename)
-    with open(file_path, "wb") as buffer: 
-        shutil.copyfileobj(file.file, buffer)
+    unique_filename = f"{uuid.uuid4()}_{file.filename}"
+    file_path = os.path.join("temp_uploads", unique_filename)
+    
+    # 🎯 수정된 비동기 쓰기 로직
+    async with aiofiles.open(file_path, 'wb') as buffer:
+        content = await file.read()
+        await buffer.write(content)
+        await buffer.flush() # 🎯 디스크 쓰기 버퍼를 강제로 비웁니다.
+    
+    # 🎯 안정성을 위한 추가 조치: 파일이 생성될 때까지 아주 짧은 대기 시간을 가집니다.
+    # 대규모 부하 상황에서 OS의 파일 시스템 지연을 방지합니다.
+    retry_count = 0
+    while not os.path.exists(file_path) and retry_count < 5:
+        await asyncio.sleep(0.1)
+        retry_count += 1
     
     try:
+        # 🎯 파서 호출 시 파일이 완전히 준비되었는지 확인
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            raise HTTPException(status_code=500, detail="파일 저장 실패")
+
         text_content = await resume_parser.extract_text(file_path)
+        
+        # 이후 로직 (동일 유지)
         content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
         
-        existing = db.query(models.JobPosting).filter(
+        stmt = select(models.JobPosting).filter(
             models.JobPosting.company == "USER_UPLOAD",
             models.JobPosting.search_keyword == content_hash
-        ).first()
+        )
+        result = await db.execute(stmt)
+        existing = result.scalars().first()
 
         if existing:
             return {"status": "success", "id": existing.id}
 
         resume_vector = await ai_service.get_embedding(text_content)
         new_resume = models.JobPosting(
-            title=f"RESUME: {file.filename}", 
-            company="USER_UPLOAD", 
-            description=text_content, 
-            location=location, 
-            search_keyword=content_hash, 
-            embedding=resume_vector
+            title=f"RESUME: {file.filename}", company="USER_UPLOAD", 
+            description=text_content, location=location, 
+            search_keyword=content_hash, embedding=resume_vector
         )
         db.add(new_resume)
-        db.commit()
-        db.refresh(new_resume)
+        await db.commit()           
+        await db.refresh(new_resume) 
         return {"status": "success", "id": new_resume.id}
+    
+    except Exception as e:
+        # 상세 에러 로그 출력 (디버깅용)
+        print(f"❌ 분석 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)}")
+    
     finally:
+        # 작업 종료 후 파일 삭제
         if os.path.exists(file_path): 
-            os.remove(file_path)
+            try:
+                os.remove(file_path)
+            except:
+                pass # 다른 프로세스가 사용 중일 경우 대비
 
 @app.get("/match/{resume_id}")
 async def match_jobs(
     resume_id: int, 
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db), # 🎯 비동기 세션 타입 명시
     levels: Optional[List[str]] = Query(None),
     types: Optional[List[str]] = Query(None),
     skills: Optional[List[str]] = Query(None)
@@ -165,13 +206,17 @@ async def match_jobs(
         cached = rd.get(cache_key)
         if cached: return json.loads(cached)
 
-    resume = db.query(models.JobPosting).filter(models.JobPosting.id == resume_id).first()
+    # 1. 이력서 정보 비동기 로드
+    stmt = select(models.JobPosting).filter(models.JobPosting.id == resume_id)
+    result = await db.execute(stmt)
+    resume = result.scalars().first()
     if not resume: raise HTTPException(status_code=404)
 
     search_locs = job_collector.NA_HUBS if resume.location == "North America" else [resume.location]
     score_query = (1 - models.JobPosting.embedding.cosine_distance(resume.embedding)).label("score")
     
-    query = db.query(models.JobPosting, score_query).filter(
+    # 2. 매칭 쿼리 조립
+    query = select(models.JobPosting, score_query).filter(
         models.JobPosting.company != "USER_UPLOAD",
         models.JobPosting.location.in_(search_locs)
     )
@@ -182,23 +227,32 @@ async def match_jobs(
         skill_filters = [models.JobPosting.skills.ilike(f"%{s}%") for s in skills]
         query = query.filter(or_(*skill_filters))
 
-    candidates = query.order_by(desc("score")).limit(100).all()
+    query = query.order_by(desc("score")).limit(100)
+    
+    # 3. 비동기 쿼리 실행
+    result = await db.execute(query)
+    candidates = result.all() # 튜플 (JobPosting, score) 리스트 반환
+    
     if not candidates: return []
 
     jobs_only = [c[0] for c in candidates]
     scores_dict = {c[0].id: c[1] for c in candidates}
     
-    # AI 리랭킹
+    # AI 리랭킹 (유지)
     order = await ai_service.rerank_jobs(resume.description, jobs_only, preferred_skills=skills)
     
     results = []
-    # 🎯 결과 출력 개수를 5개에서 10개로 상향 조정했습니다.
     for idx in order[:10]:
         if idx >= len(jobs_only): continue
         job = jobs_only[idx]
-        analysis = db.query(models.MatchAnalysis).filter(
-            models.MatchAnalysis.resume_id == resume_id, models.MatchAnalysis.job_id == job.id
-        ).first()
+        
+        # 🎯 비동기 분석 기록 확인
+        analysis_stmt = select(models.MatchAnalysis).filter(
+            models.MatchAnalysis.resume_id == resume_id, 
+            models.MatchAnalysis.job_id == job.id
+        )
+        analysis_res = await db.execute(analysis_stmt)
+        analysis = analysis_res.scalars().first()
 
         if not analysis:
             ko = await ai_service.analyze_match(resume.description, job.description, lang="ko")
@@ -209,18 +263,14 @@ async def match_jobs(
                 summary_en=en.get("job_summary", ""), analysis_en=en.get("detail_analysis", "")
             )
             db.add(analysis)
-            db.commit()
+            await db.commit() # 🎯 분석 결과 비동기 저장
 
         results.append({
-            "title": str(job.title), 
-            "company": str(job.company), 
-            "location": str(job.location),
-            "salary": str(job.salary), 
+            "title": str(job.title), "company": str(job.company), 
+            "location": str(job.location), "salary": str(job.salary), 
             "match_score": round(float(scores_dict[job.id]), 4),
-            "summary_ko": analysis.summary_ko, 
-            "analysis_ko": analysis.analysis_ko,
-            "summary_en": analysis.summary_en, 
-            "analysis_en": analysis.analysis_en,
+            "summary_ko": analysis.summary_ko, "analysis_ko": analysis.analysis_ko,
+            "summary_en": analysis.summary_en, "analysis_en": analysis.analysis_en,
             "skills": job.skills 
         })
 

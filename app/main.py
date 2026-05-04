@@ -2,6 +2,9 @@
 import sys, asyncio, os, shutil, time, json, redis, hashlib
 import aiofiles
 import uuid # 🎯 고유 식별자 생성을 위해 상단에 추가되어야 합니다.
+import time
+import traceback # 🎯 에러 추적을 위해 상단에 꼭 추가해 주세요!
+
 from datetime import datetime, timedelta
 from typing import List, Optional
 from contextlib import asynccontextmanager
@@ -122,6 +125,9 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     total = result.scalar()
     return {"total_jobs": total}
 
+
+parse_semaphore = asyncio.Semaphore(10)
+
 # 이력서 처리 엔드포인트 수정 (완전 수정본)
 @app.post("/process-resume")
 async def process_resume(
@@ -134,62 +140,81 @@ async def process_resume(
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.join("temp_uploads", unique_filename)
     
-    # 🎯 수정된 비동기 쓰기 로직
-    async with aiofiles.open(file_path, 'wb') as buffer:
-        content = await file.read()
-        await buffer.write(content)
-        await buffer.flush() # 🎯 디스크 쓰기 버퍼를 강제로 비웁니다.
-    
-    # 🎯 안정성을 위한 추가 조치: 파일이 생성될 때까지 아주 짧은 대기 시간을 가집니다.
-    # 대규모 부하 상황에서 OS의 파일 시스템 지연을 방지합니다.
-    retry_count = 0
-    while not os.path.exists(file_path) and retry_count < 5:
-        await asyncio.sleep(0.1)
-        retry_count += 1
-    
     try:
-        # 🎯 파서 호출 시 파일이 완전히 준비되었는지 확인
-        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-            raise HTTPException(status_code=500, detail="파일 저장 실패")
-
-        text_content = await resume_parser.extract_text(file_path)
+        # 1. 파일 쓰기
+        async with aiofiles.open(file_path, 'wb') as buffer:
+            content = await file.read()
+            await buffer.write(content)
+            await buffer.flush()
+            
+        # 2. Windows 파일 잠금 해제 대기
+        max_retries = 20
+        retry_delay = 0.1
+        file_ready = False
         
-        # 이후 로직 (동일 유지)
-        content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
-        
-        stmt = select(models.JobPosting).filter(
-            models.JobPosting.company == "USER_UPLOAD",
-            models.JobPosting.search_keyword == content_hash
-        )
-        result = await db.execute(stmt)
-        existing = result.scalars().first()
+        for _ in range(max_retries):
+            try:
+                with open(file_path, 'rb') as f:
+                    file_ready = True
+                    break
+            except PermissionError:
+                await asyncio.sleep(retry_delay)
+            except FileNotFoundError:
+                await asyncio.sleep(retry_delay)
+                
+        if not file_ready:
+            raise HTTPException(status_code=500, detail="시스템 지연으로 파일을 열 수 없습니다.")
 
-        if existing:
-            return {"status": "success", "id": existing.id}
+        # 3. 파싱 및 비즈니스 로직
+        async with parse_semaphore: 
+            try:
+                # 🎯 스레드 풀(run_in_executor)을 제거하고 정석적인 await로 원상 복구합니다.
+                text_content = await resume_parser.extract_text(file_path)
+                
+                content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
+                
+                stmt = select(models.JobPosting).filter(
+                    models.JobPosting.company == "USER_UPLOAD",
+                    models.JobPosting.search_keyword == content_hash
+                )
+                result = await db.execute(stmt)
+                existing = result.scalars().first()
 
-        resume_vector = await ai_service.get_embedding(text_content)
-        new_resume = models.JobPosting(
-            title=f"RESUME: {file.filename}", company="USER_UPLOAD", 
-            description=text_content, location=location, 
-            search_keyword=content_hash, embedding=resume_vector
-        )
-        db.add(new_resume)
-        await db.commit()           
-        await db.refresh(new_resume) 
-        return {"status": "success", "id": new_resume.id}
-    
-    except Exception as e:
-        # 상세 에러 로그 출력 (디버깅용)
-        print(f"❌ 분석 오류: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)}")
+                if existing:
+                    return {"status": "success", "id": existing.id}
+
+                # 🎯 제가 실수로 날려먹었던 바로 그 '치트키' 복구 완료!
+                res = ai_service.get_embedding(text_content)
+                if asyncio.iscoroutine(res):
+                    resume_vector = await res
+                else:
+                    resume_vector = res
+                
+                new_resume = models.JobPosting(
+                    title=f"RESUME: {file.filename}", 
+                    company="USER_UPLOAD", 
+                    description=str(text_content),  # 🎯 텍스트 강제 변환 복구
+                    location=str(location),         # 🎯 텍스트 강제 변환 복구
+                    search_keyword=str(content_hash), 
+                    embedding=resume_vector
+                )
+                db.add(new_resume)
+                await db.commit()           
+                await db.refresh(new_resume) 
+                return {"status": "success", "id": new_resume.id}
+                
+            except Exception as e:
+                # 에러가 나면 터미널에 상세 위치를 찍어줍니다.
+                traceback.print_exc()
+                print(f"❌ 파싱/저장 오류: {e}")
+                raise HTTPException(status_code=500, detail="분석 실패")
     
     finally:
-        # 작업 종료 후 파일 삭제
         if os.path.exists(file_path): 
             try:
                 os.remove(file_path)
             except:
-                pass # 다른 프로세스가 사용 중일 경우 대비
+                pass
 
 @app.get("/match/{resume_id}")
 async def match_jobs(

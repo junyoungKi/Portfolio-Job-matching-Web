@@ -140,8 +140,12 @@
 
 지금 바로 **현재 서버를 터뜨려보고 병목 지점을 찾을 수 있는 Locust 테스트 스크립트**를 짜드릴까요? 아니면 **FastAPI의 DB 연결부를 비동기(`AsyncSession`)로 바꾸는 2단계 코드 리팩토링**부터 시작해볼까요? 선택하시는 방향으로 바로 가이드 들어갑니다.
 
-
-
 Frontend - React 리팩토링
 
 CI/CD 자동 배포 파이프라인
+
+
+
+![](C:\Users\dskt\Downloads\number_of_users_1777893896.141.png)
+
+![](C:\Users\dskt\Downloads\total_requests_per_second_1777544213.885.png)

@@ -132,8 +132,8 @@ parse_semaphore = asyncio.Semaphore(10)
 @app.post("/process-resume")
 async def process_resume(
     file: UploadFile = File(...), 
-    keyword: str = Form(...), 
-    location: str = Form(...), 
+    keyword: str = Query(...), 
+    location: str = Query(...), 
     db: AsyncSession = Depends(get_db)
 ):
     os.makedirs("temp_uploads", exist_ok=True)

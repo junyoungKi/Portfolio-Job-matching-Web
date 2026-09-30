@@ -50,7 +50,7 @@ async def seed():
         db.add(db_job)
     db.commit()
     db.close()
-    print("\n 하이퍼 리얼리즘 공고 6건 추가 완료!")
+    print("\n6!")
 
 if __name__ == "__main__":
     asyncio.run(seed())

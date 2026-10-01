@@ -2,32 +2,32 @@ import os
 from locust import HttpUser, task, between
 
 class SmartJobUser(HttpUser):
-    # 각 가상 유저가 다음 행동을 하기 전까지 기다리는 시간 (1~3초 사이 랜덤)
+    # Wait time between tasks for each virtual user (random between 1 and 3 seconds)
     wait_time = between(1, 3)
 
-    @task(2) # @task 숫자는 실행 빈도의 가중치입니다. (조회를 더 자주 함)
+    @task(2) # Task weight: Higher number means higher execution frequency (reads stats more frequently)
     def check_stats(self):
-        """DB 통신 부하 테스트: 저장된 공고 개수 조회"""
+        """DB Communication Load Test: Retrieve count of stored job postings"""
         self.client.get("/stats")
 
     @task(1)
     def upload_resume(self):
         """
-        파일 I/O 및 AI 분석 부하 테스트 (가장 큰 병목 예상 지점)
-        이력서를 업로드하고 매칭 결과를 요청합니다.
+        File I/O and AI analysis load test (expected primary bottleneck).
+        Uploads a resume and requests matching results.
         """
         file_path = "test_resume.pdf"
         
-        # 테스트를 위해 임시 PDF 파일이 없다면 생성합니다 (에러 방지용)
+        # Create a temporary PDF file for testing if it does not exist (to prevent errors)
         if not os.path.exists(file_path):
             with open(file_path, "wb") as f:
                 f.write(b"%PDF-1.4 Dummy PDF Content for Load Testing")
 
         with open(file_path, "rb") as f:
-            # main.py의 /process-resume 엔드포인트 구조에 맞춰 데이터 전송
+            # Send data matched to the /process-resume endpoint structure in main.py
             self.client.post(
                 "/process-resume",
-                data={
+                params={
                     "keyword": "Software Engineer", 
                     "location": "North America"
                 },

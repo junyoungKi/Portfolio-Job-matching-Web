@@ -12,3 +12,4 @@ apscheduler
 greenlet
 pgvector
 python-multipart
+locust

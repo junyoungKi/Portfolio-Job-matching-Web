@@ -267,7 +267,7 @@ async def match_jobs(
     order = await ai_service.rerank_jobs(resume.description, jobs_only, preferred_skills=skills)
     
     results = []
-    for idx in order[:10]:
+    for idx in order[:10]: #slicing to top 10
         if idx >= len(jobs_only): continue
         job = jobs_only[idx]
         

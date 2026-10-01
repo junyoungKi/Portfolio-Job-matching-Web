@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+asyncpg
+python-dotenv
+aiofiles
+pymupdf
+openai
+playwright
+redis
+apscheduler
+greenlet
+pgvector
+python-multipart

@@ -199,7 +199,12 @@ async def process_resume(
                 existing = result.scalars().first()
 
                 if existing:
-                    return {"status": "success", "id": existing.id}
+                    return {
+                        "status": "success", 
+                        "id": existing.id,
+                        "parsed_text_length": len(text_content),
+                        "parsed_text_preview": str(text_content)
+                    }
 
                 # 🎯 제가 실수로 날려먹었던 바로 그 '치트키' 복구 완료!
                 res = ai_service.get_embedding(text_content)

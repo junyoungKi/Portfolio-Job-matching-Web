@@ -219,7 +219,12 @@ async def process_resume(
                 db.add(new_resume)
                 await db.commit()           
                 await db.refresh(new_resume) 
-                return {"status": "success", "id": new_resume.id}
+                return {
+                    "status": "success", 
+                    "id": new_resume.id,
+                    "parsed_text_length": len(text_content),
+                    "parsed_text_preview": str(text_content) # 🎯 추출된 텍스트 전체/일부를 스웨거 응답으로 반환
+                }
                 
             except Exception as e:
                 # 에러가 나면 터미널에 상세 위치를 찍어줍니다.

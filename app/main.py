@@ -146,7 +146,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
 parse_semaphore = asyncio.Semaphore(10)
 
-# 이력서 처리 엔드포인트 수정 (완전 수정본)
+# 이력서 처리 엔드포인트
 @app.post("/process-resume")
 async def process_resume(
     file: UploadFile = File(...), 
@@ -165,7 +165,7 @@ async def process_resume(
             await buffer.write(content)
             await buffer.flush()
             
-        # 2. Windows 파일 잠금 해제 대기
+        # 2. Windows/OS 파일 잠금 해제 대기
         max_retries = 20
         retry_delay = 0.1
         file_ready = False
@@ -185,65 +185,58 @@ async def process_resume(
 
         # 3. 파싱 및 비즈니스 로직
         async with parse_semaphore: 
-            try:
-                # 🎯 스레드 풀(run_in_executor)을 제거하고 정석적인 await로 원상 복구합니다.
-                text_content = await resume_parser.extract_text(file_path)
-                
-                content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
-                
-                stmt = select(models.JobPosting).filter(
-                    models.JobPosting.company == "USER_UPLOAD",
-                    models.JobPosting.search_keyword == content_hash
-                )
-                result = await db.execute(stmt)
-                existing = result.scalars().first()
+            text_content = await resume_parser.extract_text(file_path)
+            content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
+            
+            stmt = select(models.JobPosting).filter(
+                models.JobPosting.company == "USER_UPLOAD",
+                models.JobPosting.search_keyword == content_hash
+            )
+            result = await db.execute(stmt)
+            existing = result.scalars().first()
 
-                if existing:
-                    return {
-                        "status": "success", 
-                        "id": existing.id,
-                        "parsed_text_length": len(text_content),
-                        "parsed_text_preview": str(text_content)
-                    }
-
-                # 🎯 제가 실수로 날려먹었던 바로 그 '치트키' 복구 완료!
-                res = ai_service.get_embedding(text_content)
-                if asyncio.iscoroutine(res):
-                    resume_vector = await res
-                else:
-                    resume_vector = res
-                
-                new_resume = models.JobPosting(
-                    title=f"RESUME: {file.filename}", 
-                    company="USER_UPLOAD", 
-                    description=str(text_content),  # 🎯 텍스트 강제 변환 복구
-                    location=str(location),         # 🎯 텍스트 강제 변환 복구
-                    search_keyword=str(content_hash), 
-                    embedding=resume_vector
-                )
-                db.add(new_resume)
-                await db.commit()           
-                await db.refresh(new_resume) 
+            if existing:
                 return {
                     "status": "success", 
-                    "id": new_resume.id,
+                    "id": existing.id,
                     "parsed_text_length": len(text_content),
-                    "parsed_text_preview": str(text_content) # 🎯 추출된 텍스트 전체/일부를 스웨거 응답으로 반환
+                    "parsed_text_preview": str(text_content)
                 }
-                
-            except Exception as e:
-                # 에러가 나면 터미널에 상세 위치를 찍어줍니다.
-                traceback.print_exc()
-                print(f"❌ 파싱/저장 오류: {e}")
-                raise HTTPException(status_code=500, detail="분석 실패")
 
-    finally:
-        pass
-                
+            res = ai_service.get_embedding(text_content)
+            if asyncio.iscoroutine(res):
+                resume_vector = await res
+            else:
+                resume_vector = res
+            
+            new_resume = models.JobPosting(
+                title=f"RESUME: {file.filename}", 
+                company="USER_UPLOAD", 
+                description=str(text_content),
+                location=str(location),
+                search_keyword=str(content_hash), 
+                embedding=resume_vector
+            )
+            db.add(new_resume)
+            await db.commit()           
+            await db.refresh(new_resume) 
+            
+            return {
+                "status": "success", 
+                "id": new_resume.id,
+                "parsed_text_length": len(text_content),
+                "parsed_text_preview": str(text_content)
+            }
+
+    except Exception as e:
+        traceback.print_exc()
+        print(f"❌ 파싱/저장 오류: {e}")
+        raise HTTPException(status_code=500, detail="분석 실패")
+
 @app.get("/match/{resume_id}")
 async def match_jobs(
     resume_id: int, 
-    db: AsyncSession = Depends(get_db), # 🎯 비동기 세션 타입 명시
+    db: AsyncSession = Depends(get_db),
     levels: Optional[List[str]] = Query(None),
     types: Optional[List[str]] = Query(None),
     skills: Optional[List[str]] = Query(None)
@@ -263,14 +256,16 @@ async def match_jobs(
     stmt = select(models.JobPosting).filter(models.JobPosting.id == resume_id)
     result = await db.execute(stmt)
     resume = result.scalars().first()
-    if not resume: raise HTTPException(status_code=404)
+    if not resume: 
+        raise HTTPException(status_code=404, detail="Resume not found")
 
-    # 🎯 수정 코드 (대소문자 및 공백 제거 처리):
-loc_clean = str(resume.location).strip().lower() if resume.location else ""
-if loc_clean in ["north america", "northamerica", "na"]:
-    search_locs = job_collector.NA_HUBS
-else:
-    search_locs = [resume.location]
+    # 🎯 대소문자 및 공백 처리 (들여쓰기 정상화)
+    loc_clean = str(resume.location).strip().lower() if resume.location else ""
+    if loc_clean in ["north america", "northamerica", "na"]:
+        search_locs = job_collector.NA_HUBS
+    else:
+        search_locs = [resume.location]
+        
     score_query = (1 - models.JobPosting.embedding.cosine_distance(resume.embedding)).label("score")
     
     # 2. 매칭 쿼리 조립
@@ -289,22 +284,22 @@ else:
     
     # 3. 비동기 쿼리 실행
     result = await db.execute(query)
-    candidates = result.all() # 튜플 (JobPosting, score) 리스트 반환
+    candidates = result.all()
     
-    if not candidates: return []
+    if not candidates: 
+        return []
 
     jobs_only = [c[0] for c in candidates]
     scores_dict = {c[0].id: c[1] for c in candidates}
     
-    # AI 리랭킹 (유지)
+    # AI 리랭킹
     order = await ai_service.rerank_jobs(resume.description, jobs_only, preferred_skills=skills)
     
     results = []
-    for idx in order[:10]: #slicing to top 10
+    for idx in order[:10]:
         if idx >= len(jobs_only): continue
         job = jobs_only[idx]
         
-        # 🎯 비동기 분석 기록 확인
         analysis_stmt = select(models.MatchAnalysis).filter(
             models.MatchAnalysis.resume_id == resume_id, 
             models.MatchAnalysis.job_id == job.id
@@ -321,7 +316,7 @@ else:
                 summary_en=en.get("job_summary", ""), analysis_en=en.get("detail_analysis", "")
             )
             db.add(analysis)
-            await db.commit() # 🎯 분석 결과 비동기 저장
+            await db.commit()
 
         results.append({
             "title": str(job.title), "company": str(job.company), 

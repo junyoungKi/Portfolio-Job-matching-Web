@@ -5,6 +5,8 @@ import uuid # 🎯 고유 식별자 생성을 위해 상단에 추가되어야 �
 import time
 import traceback # 🎯 에러 추적을 위해 상단에 꼭 추가해 주세요!
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime, timedelta
 from typing import List, Optional
 from contextlib import asynccontextmanager

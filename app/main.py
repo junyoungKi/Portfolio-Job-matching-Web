@@ -226,13 +226,6 @@ async def process_resume(
                 traceback.print_exc()
                 print(f"❌ 파싱/저장 오류: {e}")
                 raise HTTPException(status_code=500, detail="분석 실패")
-    
-    finally:
-        if os.path.exists(file_path): 
-            try:
-                os.remove(file_path)
-            except:
-                pass
 
 @app.get("/match/{resume_id}")
 async def match_jobs(
@@ -259,7 +252,12 @@ async def match_jobs(
     resume = result.scalars().first()
     if not resume: raise HTTPException(status_code=404)
 
-    search_locs = job_collector.NA_HUBS if resume.location == "North America" else [resume.location]
+    # 🎯 수정 코드 (대소문자 및 공백 제거 처리):
+loc_clean = str(resume.location).strip().lower() if resume.location else ""
+if loc_clean in ["north america", "northamerica", "na"]:
+    search_locs = job_collector.NA_HUBS
+else:
+    search_locs = [resume.location]
     score_query = (1 - models.JobPosting.embedding.cosine_distance(resume.embedding)).label("score")
     
     # 2. 매칭 쿼리 조립

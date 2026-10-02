@@ -237,6 +237,8 @@ async def process_resume(
                 print(f"❌ 파싱/저장 오류: {e}")
                 raise HTTPException(status_code=500, detail="분석 실패")
 
+    finally:
+        pass
 @app.get("/match/{resume_id}")
 async def match_jobs(
     resume_id: int, 

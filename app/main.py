@@ -26,13 +26,16 @@ from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
 
-# Redis 연결 (유지)
+# Redis 연결 (환경변수 'REDIS_HOST'가 없으면 기본값 'redis' 사용)
 try:
-    rd = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    redis_host = os.getenv("REDIS_HOST", "redis")
+    redis_port = int(os.getenv("REDIS_PORT", 6379))
+    rd = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
     print("✅ Redis 연결 성공")
-except:
+except Exception as e:
+    print(f"❌ Redis 연결 실패: {e}")
     rd = None
-
+    
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 적용)
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 + 일괄 수집 방식)
 async def scheduled_north_america_crawl():

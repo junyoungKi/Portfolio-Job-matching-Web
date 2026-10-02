@@ -25,6 +25,7 @@ from . import models
 from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
+import os
 
 # Redis 연결 (환경변수 'REDIS_HOST'가 없으면 기본값 'redis' 사용)
 try:

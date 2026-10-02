@@ -26,16 +26,28 @@ from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
 import os
+import redis
+import json
 
-# Redis 연결 (환경변수 'REDIS_HOST'가 없으면 기본값 'redis' 사용)
+# Redis 호스트 설정 (환경변수 없으면 'redis' 사용)
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+
+# Redis connection 
 try:
-    redis_host = os.getenv("REDIS_HOST", "redis")
-    redis_port = int(os.getenv("REDIS_PORT", 6379))
-    rd = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
-    print("✅ Redis connection successful")
+    rd = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+    rd.ping()  # 실제로 통신이 되는지 확인
+    print(f"✅ Redis 연결 성공 ({REDIS_HOST}:{REDIS_PORT})")
 except Exception as e:
-    print(f"❌ Redis connection failed: {e}")
-    rd = None
+    print(f"⚠️ Redis 연결 실패, 재시도 주소 설정: {e}")
+    # ConnectionRefused 방지를 위해 fallback 주소도 'redis'로 강제 지정
+    try:
+        rd = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
+        rd.ping()
+        print("✅ Redis 연결 성공 (fallback: redis)")
+    except Exception as ex:
+        print(f"❌ Redis 최종 연결 실패: {ex}")
+        rd = None
 
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 적용)
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 + 일괄 수집 방식)
@@ -234,8 +246,12 @@ async def match_jobs(
     cache_key = f"match_results:{resume_id}:{hashlib.md5(filter_tag.encode()).hexdigest()}"
     
     if rd:
-        cached = rd.get(cache_key)
-        if cached: return json.loads(cached)
+        try:
+            cached = rd.get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception as e:
+            print(f"Redis 읽기 오류: {e}")
 
     # 1. 이력서 정보 비동기 로드
     stmt = select(models.JobPosting).filter(models.JobPosting.id == resume_id)

@@ -31,11 +31,11 @@ try:
     redis_host = os.getenv("REDIS_HOST", "redis")
     redis_port = int(os.getenv("REDIS_PORT", 6379))
     rd = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
-    print("✅ Redis 연결 성공")
+    print("✅ Redis connection successful")
 except Exception as e:
-    print(f"❌ Redis 연결 실패: {e}")
+    print(f"❌ Redis connection failed: {e}")
     rd = None
-    
+
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 적용)
 # [JOB 1] 정기 공고 수집 작업 (비동기 DB 세션 + 일괄 수집 방식)
 async def scheduled_north_america_crawl():

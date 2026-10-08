@@ -1,8 +1,17 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Drag-and-drop / click-to-browse PDF picker.
+ *
+ * Accepts only PDF files (reporting anything else through ``onInvalid``) and shows the selected file with
+ * buttons to replace or remove it.
+ */
 import { FileText, RefreshCw, Trash2, UploadCloud } from 'lucide-react'
 import { useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type { Translation } from '../lib/i18n'
 
+/** Props of `FileDropzone`. */
 interface Props {
   t: Translation
   file: File | null
@@ -11,19 +20,23 @@ interface Props {
   onInvalid: () => void
 }
 
+/** Whether the file is a PDF, judged by MIME type or by the `.pdf` extension (some browsers leave the type empty). */
 function isPdf(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 }
 
+/** Format a byte count as a human-readable KB/MB string. */
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`
   return `${Math.max(1, Math.round(bytes / 1024)).toLocaleString()} KB`
 }
 
+/** Resume upload area with drag-and-drop highlighting and a keyboard-accessible hidden file input. */
 export function FileDropzone({ t, file, disabled, onFile, onInvalid }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
 
+/** Validate a candidate file and hand it to the parent, or report it as invalid. */
   const accept = (candidate: File | undefined) => {
     if (!candidate) return
     if (!isPdf(candidate)) {
@@ -33,6 +46,7 @@ export function FileDropzone({ t, file, disabled, onFile, onInvalid }: Props) {
     onFile(candidate)
   }
 
+/** Handle a file dropped on the zone; ignored while the form is disabled. */
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragging(false)

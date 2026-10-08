@@ -1,4 +1,13 @@
 # app/models.py
+"""
+Author: Joonyoung Ki
+
+SQLAlchemy ORM models for the job-matching service.
+
+Defines ``JobPosting`` (crawled job postings and uploaded resumes, with pgvector embeddings and an
+HNSW index for fast similarity search) and ``MatchAnalysis`` (cached Korean/English LLM analyses
+for a resume/job pair).
+"""
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
@@ -6,6 +15,11 @@ from .database import Base
 from sqlalchemy.sql import func
 
 class JobPosting(Base):
+    """A crawled job posting, or an uploaded resume (stored with ``company == "USER_UPLOAD"``).
+
+    Both kinds share one table so that resumes and jobs live in the same embedding space and can be
+    compared with a single cosine-distance query.
+    """
     __tablename__ = "job_postings"
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
@@ -16,34 +30,39 @@ class JobPosting(Base):
     search_keyword = Column(String)
     embedding = Column(Vector(1536)) 
     
-    # 필터링 컬럼
+    # Filtering columns
     employment_type = Column(String, index=True)
     experience_level = Column(String, index=True)
     skills = Column(Text)
 
-    # 🆕 데이터 관리를 위한 수집 일시 추가
+    # Collection timestamp, added for data management (used to expire old postings)
     created_at = Column(DateTime, server_default=func.now())
 
-    # 🚀 바로 이 부분이 "HNSW 인덱싱"을 실제로 생성하는 핵심 코드입니다.
-    # 현재 단계에서는 크롤링된 공고가 많지 않아 큰 문제가 없지만, 차후 실제 서비스가
-    # 가능하도록 하려면 수만 이상의 공고가 크롤링될 것이고 현재 B-Tree방식의 인덱싱만으로는
-    # 검색 시간이 너무 오래걸릴 수 있다. 이를 대비하여 HNSW 인덱싱(그래프 탐색Graph Traversal 기반)을 추가한다. O(log N)
+    # This is the key code that actually creates the HNSW index.
+    # At this stage there are not many crawled postings, so it is not a problem yet. However, a
+    # production service would crawl tens of thousands of postings or more, and the B-Tree-only
+    # indexing could make searches too slow. To prepare for that, an HNSW index (based on graph
+    # traversal) is added. O(log N)
     __table_args__ = (
         Index(
-            "ix_job_postings_embedding_hnsw", # 인덱스 이름
-            "embedding",                      # 대상 컬럼
-            postgresql_using="hnsw",          # HNSW 알고리즘 사용 명시
+            "ix_job_postings_embedding_hnsw", # index name
+            "embedding",                      # target column
+            postgresql_using="hnsw",          # explicitly use the HNSW algorithm
             postgresql_with={
-                "m": 16,                      # 그래프의 최대 연결 수
-                "ef_construction": 64         # 인덱스 생성 시 탐색 범위
+                "m": 16,                      # maximum number of connections per graph node
+                "ef_construction": 64         # search range while building the index
             },
-            postgresql_ops={"embedding": "vector_cosine_ops"}, # 코사인 유사도 기준
+            postgresql_ops={"embedding": "vector_cosine_ops"}, # cosine similarity as the metric
         ),
     )
 
     
 
 class MatchAnalysis(Base):
+    """Cached LLM match analysis between one resume and one job, in both Korean and English.
+
+    Storing both languages lets the UI switch language without calling the LLM again.
+    """
     __tablename__ = "match_analyses"
     id = Column(Integer, primary_key=True, index=True)
     resume_id = Column(Integer, index=True)

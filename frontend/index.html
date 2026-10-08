@@ -1,4 +1,10 @@
 <!doctype html>
+<!--
+  Author: Joonyoung Ki
+
+  HTML entry of the Vite React app. It sets the document metadata, applies the saved light/dark theme
+  with an inline script before first paint (avoiding a flash of the wrong theme) and mounts the app into #root.
+-->
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
@@ -7,6 +13,7 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#3b5bdb" />
     <title>Smart Job AI</title>
+    <!-- Apply the stored theme (or the OS preference) immediately; mirrors the logic in src/lib/theme.ts. -->
     <script>
       (function () {
         try {

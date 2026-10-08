@@ -1,13 +1,21 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Three-step progress indicator (Upload -> Preferences -> Results).
+ */
 import { Check } from 'lucide-react'
 import type { Translation } from '../lib/i18n'
 
+/** Progress state of one step. */
 export type StepStatus = 'done' | 'current' | 'upcoming'
 
+/** Props of `Stepper`; `statuses` holds one state per step. */
 interface Props {
   t: Translation
   statuses: [StepStatus, StepStatus, StepStatus]
 }
 
+/** Accessible ordered list of steps with connectors; screen readers get the number, label and state of each step. */
 export function Stepper({ t, statuses }: Props) {
   const labels = [t.stepUpload, t.stepConditions, t.stepResults]
   const statusText: Record<StepStatus, string> = {

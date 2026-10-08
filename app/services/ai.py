@@ -1,4 +1,12 @@
 # app/services/ai.py
+"""
+Author: Joonyoung Ki
+
+OpenAI-backed AI service for the job-matching pipeline.
+
+Provides text embeddings, job metadata extraction (employment type, experience level, skills),
+LLM re-ranking of vector-search candidates, and bilingual (Korean/English) match analysis.
+"""
 import os
 import json
 from openai import AsyncOpenAI
@@ -8,12 +16,20 @@ load_dotenv()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class AIService:
+    """Thin wrapper around the OpenAI client exposing the AI operations used by the API and crawler."""
+
     async def get_embedding(self, text: str):
+        """Return the ``text-embedding-3-small`` vector (1536 dimensions) for the given text."""
         response = await client.embeddings.create(input=text, model="text-embedding-3-small")
         return response.data[0].embedding
 
-    # 🆕 공고 분석 및 태그 추출 (Enrichment)
+    # Job posting analysis and tag extraction (enrichment)
     async def extract_job_metadata(self, description: str):
+        """Extract employment type, experience level and top skills from a job description.
+
+        Uses JSON-mode output. On any failure it returns safe defaults so that a single bad
+        response never blocks the crawl pipeline.
+        """
         prompt = f"""
         Analyze this job description and return JSON:
         1. employment_type: (Full-time, Part-time, Internship, Contract)
@@ -33,17 +49,22 @@ class AIService:
             return {"employment_type": "Full-time", "experience_level": "Junior", "skills": []}
 
     async def rerank_jobs(self, resume_text: str, jobs: list, preferred_skills: list = None):
+        """Ask the LLM to order candidate jobs by relevance to the resume.
+
+        Returns a list of indices into ``jobs`` (best first). If the LLM call or its parsing
+        fails, the original (vector-similarity) order is returned instead.
+        """
         if not jobs: return []
         job_list_str = "\n".join([f"[{i}] {j.title} at {j.company} (Skills: {j.skills})" for i, j in enumerate(jobs)])
         
         skill_instruction = f"\nNote: The user prefers these skills: {', '.join(preferred_skills)}" if preferred_skills else ""
         
         prompt = f"""
-        당신은 채용 전문가입니다. 이력서를 읽고 제공된 모든 공고({len(jobs)}개)의 우선순위를 정하세요.{skill_instruction}
-        반드시 [0, 1, 2, ...] 처럼 모든 인덱스 번호를 포함한 리스트만 응답하세요.
+        You are a recruiting expert. Read the resume and prioritize all of the provided job postings ({len(jobs)} in total).{skill_instruction}
+        You must respond with only a list that contains every index number, like [0, 1, 2, ...].
         
-        [이력서]: {resume_text[:500]}
-        [공고 리스트]:
+        [Resume]: {resume_text[:500]}
+        [Job List]:
         {job_list_str}
         """
         try:
@@ -54,6 +75,12 @@ class AIService:
             return list(range(len(jobs)))
 
     async def analyze_match(self, resume_text: str, job_description: str, lang: str = "ko"):
+        """Generate a one-sentence job summary and a detailed resume-to-job analysis.
+
+        ``lang`` selects the output language ("ko" for Korean, anything else for English).
+        ``detail_analysis`` is always normalised to a single string, even if the LLM returns a
+        dict or list. On failure a placeholder result is returned.
+        """
         target_lang = "Korean" if lang == "ko" else "English"
         prompt = f"""
         Respond in {target_lang}. Return JSON:
@@ -79,6 +106,7 @@ class AIService:
             data["detail_analysis"] = str(detail)
             return data
         except:
-            return {"job_summary": "Error", "detail_analysis": "AI 분석 실패"}
+            return {"job_summary": "Error", "detail_analysis": "AI analysis failed"}
 
+# Shared singleton used across the application.
 ai_service = AIService()

@@ -1,5 +1,17 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Translation dictionaries for the dashboard UI (Korean and English).
+ *
+ * The Korean strings are product content for the Korean language option and are intentionally kept in Korean.
+ */
 import type { Lang } from '../types'
 
+/**
+ * Every UI text the dashboard needs; both language dictionaries must implement all of these keys.
+ *
+ * Function-valued entries build strings that depend on a number (counts, ranks, percentages).
+ */
 export interface Translation {
   brand: string
   brandTag: string
@@ -99,6 +111,7 @@ export interface Translation {
   footer: string
 }
 
+/** Dictionaries keyed by language code, selected in `App` according to the current `lang` state. */
 export const translations: Record<Lang, Translation> = {
   ko: {
     brand: '스마트 잡 AI',

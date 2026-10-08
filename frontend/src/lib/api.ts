@@ -1,7 +1,18 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * HTTP client for the FastAPI backend.
+ *
+ * Wraps ``fetch`` with a base URL (``VITE_API_BASE_URL``, empty for same-origin / Vite proxy), error
+ * normalisation into ``ApiError`` and typed helpers for the ``/stats``, ``/process-resume`` and
+ * ``/match/{id}`` endpoints.
+ */
 import type { Filters, JobMatch, ProcessResumeResponse, StatsResponse } from '../types'
 
+/** Backend origin without a trailing slash; empty means same origin (or the Vite dev proxy). */
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
+/** Error thrown for failed requests; `status` is the HTTP status, or 0 when the network request itself failed. */
 export class ApiError extends Error {
   readonly status: number
 
@@ -12,6 +23,12 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Perform a request and parse the JSON body as `T`.
+ *
+ * Aborted requests rethrow the original `AbortError`; other failures become an `ApiError` that carries the
+ * server-provided `detail` message when available.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
@@ -36,10 +53,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+/** Fetch the total number of collected job postings. */
 export function fetchStats(signal?: AbortSignal): Promise<StatsResponse> {
   return request<StatsResponse>('/stats', { signal })
 }
 
+/** Upload a PDF resume with the search keyword and location; resolves with the stored resume id. */
 export function processResume(
   file: File,
   keyword: string,
@@ -56,6 +75,7 @@ export function processResume(
   })
 }
 
+/** Fetch the top job matches for a stored resume, applying the selected filters as repeated query parameters. */
 export function fetchMatches(
   resumeId: number,
   filters: Filters,

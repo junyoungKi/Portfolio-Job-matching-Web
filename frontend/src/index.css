@@ -1,3 +1,9 @@
+/*
+ * Author: Joonyoung Ki
+ *
+ * Global styles of the dashboard: Tailwind import, light/dark design tokens, the mapping of those
+ * tokens to Tailwind theme colours, base element styles and shared animations.
+ */
 @import 'tailwindcss';
 
 /*
@@ -10,8 +16,10 @@
  * - Border: 1px --line for surfaces, --line-strong for interactive controls.
  */
 
+/* Enable Tailwind `dark:` variants whenever the `.dark` class is present on <html> or an ancestor. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Light theme tokens (default). */
 :root {
   --canvas: #f6f7fb;
   --surface: #ffffff;
@@ -44,6 +52,7 @@
   --hero-b: rgb(124 77 255 / 0.1);
 }
 
+/* Dark theme token overrides. */
 .dark {
   --canvas: #0a0e1a;
   --surface: #111729;
@@ -76,6 +85,7 @@
   --hero-b: rgb(150 90 255 / 0.14);
 }
 
+/* Expose the CSS variables to Tailwind as utilities such as `bg-surface`, `text-fg` and `border-line`. */
 @theme inline {
   --font-sans: 'Pretendard Variable', Pretendard, 'Inter', ui-sans-serif, system-ui, -apple-system,
     'Segoe UI', 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
@@ -105,6 +115,7 @@
   --shadow-lg: var(--shadow-lg);
 }
 
+/* Base document styles. */
 html {
   scroll-behavior: smooth;
 }
@@ -124,10 +135,12 @@ body {
     color 0.25s ease;
 }
 
+/* Fixed-width digits so that changing numbers do not shift the layout. */
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
+/* Keyboard focus outline shared by all interactive elements. */
 :focus-visible {
   outline: 2px solid var(--brand-ring);
   outline-offset: 2px;
@@ -138,6 +151,7 @@ body {
   color: var(--brand-text);
 }
 
+/* Keyframes for the animations below. */
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -177,10 +191,12 @@ body {
   }
 }
 
+/* Score gauge arc animates from empty to its final length (`--gauge-c` is the circumference). */
 .gauge-arc {
   animation: gauge-in 1s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
+/* Entrance animation; `--i` staggers consecutive items. */
 .animate-fade-up {
   animation: fade-up 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
   animation-delay: calc(var(--i, 0) * 55ms);
@@ -190,6 +206,7 @@ body {
   animation: float-y 5s ease-in-out infinite;
 }
 
+/* Shimmering loading placeholder. */
 .skeleton {
   background: linear-gradient(
     100deg,
@@ -201,6 +218,7 @@ body {
   animation: shimmer 1.4s linear infinite;
 }
 
+/* Decorative gradient glow and dotted grid behind the hero section. */
 .hero-bg {
   background:
     radial-gradient(48rem 22rem at 12% -10%, var(--hero-a), transparent 65%),
@@ -214,6 +232,7 @@ body {
   opacity: 0.45;
 }
 
+/* Respect the user's reduced-motion setting by effectively disabling animations and transitions. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

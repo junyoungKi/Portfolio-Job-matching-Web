@@ -1,3 +1,14 @@
+"""
+Author: Joonyoung Ki
+
+Main FastAPI application for the Smart Job AI job-matching service.
+
+Responsibilities:
+    - Connects to Redis (match-result cache) and PostgreSQL/pgvector (job postings, resumes, analyses).
+    - Schedules periodic LinkedIn crawling with AI tagging, and daily cleanup of stale postings.
+    - Exposes the REST API: ``/stats``, ``/process-resume`` and ``/match/{resume_id}``.
+    - Serves the React dashboard (``frontend/dist``) at ``/`` and the legacy static UI at ``/legacy``.
+"""
 import sys, asyncio, os, shutil, time, json, redis, hashlib
 import aiofiles
 import uuid
@@ -26,24 +37,30 @@ from .services.collector import job_collector
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
+# Redis is an optional cache: if it is unreachable, ``rd`` becomes None and caching is skipped.
 try:
     rd = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
     rd.ping()
-    print(f"✅ Redis 연결 성공 ({REDIS_HOST}:{REDIS_PORT})")
+    print(f"Redis connection established ({REDIS_HOST}:{REDIS_PORT})")
 except Exception as e:
-    print(f"⚠️ Redis 연결 실패, 재시도 주소 설정: {e}")
+    print(f"Redis connection failed, retrying with the fallback address: {e}")
     try:
         rd = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
         rd.ping()
-        print("✅ Redis 연결 성공 (fallback: redis)")
+        print("Redis connection established (fallback: redis)")
     except Exception as ex:
-        print(f"❌ Redis 최종 연결 실패: {ex}")
+        print(f"Redis connection failed permanently: {ex}")
         rd = None
 
 async def scheduled_north_america_crawl():
+    """Crawl LinkedIn for every North American hub, tag new postings with AI metadata and store them.
+
+    Runs on a schedule. Postings that already exist (same title and company) are skipped, and a
+    failure on one posting is rolled back without aborting the rest of the batch.
+    """
     async with AsyncSessionLocal() as db:
         try:
-            print(f"⏰ [BATCH] 정기 수집 및 AI 태깅 시작: {datetime.now()}")
+            print(f"[BATCH] Starting scheduled collection and AI tagging: {datetime.now()}")
             target_keywords = ["Software Engineer"]
             for kw in target_keywords:
                 for city in job_collector.NA_HUBS:
@@ -71,17 +88,18 @@ async def scheduled_north_america_crawl():
                                 )
                                 db.add(new_posting)
                                 await db.commit()
-                                print(f"✅ DB 저장 완료: {job['title']} @ {job['company']}")
+                                print(f"Saved to DB: {job['title']} @ {job['company']}")
                             else:
-                                print(f"⏭️ 스킵 (중복): {job['title']} @ {job['company']}")
+                                print(f"Skipped (duplicate): {job['title']} @ {job['company']}")
                         except Exception as inner_e:
                             await db.rollback()
-                            print(f"⚠️ 개별 공고 처리 실패: {inner_e}")
+                            print(f"Failed to process an individual posting: {inner_e}")
                             continue
         except Exception as e: 
-            print(f"❌ [BATCH] 전체 오류: {e}")
+            print(f"[BATCH] Batch-level error: {e}")
 
 async def cleanup_old_jobs():
+    """Delete crawled postings older than 30 days, keeping the stored user resumes (``USER_UPLOAD``)."""
     async with AsyncSessionLocal() as db:
         try:
             expiry_date = datetime.now() - timedelta(days=30)
@@ -92,17 +110,23 @@ async def cleanup_old_jobs():
             result = await db.execute(stmt)
             await db.commit()
             if result.rowcount > 0:
-                print(f"🧹 [CLEANUP] 오래된 공고 {result.rowcount}개 삭제 완료")
+                print(f"[CLEANUP] Deleted {result.rowcount} expired postings")
         except Exception as e:
             await db.rollback()
-            print(f"❌ [CLEANUP] 오류 발생: {e}")
+            print(f"[CLEANUP] Error: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifecycle: prepare the database schema and run the background scheduler.
+
+    On startup it enables the pgvector extension, creates missing tables and starts the
+    crawl (every 6 hours, first run shortly after startup) and cleanup (daily at midnight) jobs.
+    The scheduler is shut down when the application stops.
+    """
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(models.Base.metadata.create_all)
-        print("✅ 데이터베이스 테이블 로드 완료")
+        print("Database tables are ready")
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
@@ -116,11 +140,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
+    """Return the number of crawled job postings in the database (user resumes excluded)."""
     stmt = select(func.count(models.JobPosting.id)).filter(models.JobPosting.company != "USER_UPLOAD")
     result = await db.execute(stmt)
     total = result.scalar()
     return {"total_jobs": total}
 
+# Limits concurrent resume parsing/embedding so that bursts of uploads cannot exhaust resources.
 parse_semaphore = asyncio.Semaphore(10)
 
 @app.post("/process-resume")
@@ -130,6 +156,14 @@ async def process_resume(
     location: str = Query(...), 
     db: AsyncSession = Depends(get_db)
 ):
+    """Receive a PDF resume, parse and embed it, and store it as a ``USER_UPLOAD`` record.
+
+    The upload is written to a uniquely named temporary file, which is always removed afterwards.
+    Identical resume/keyword/location combinations are de-duplicated through an MD5 content hash
+    so the same resume is not parsed and embedded twice.
+
+    Returns the resume record id that the client passes to ``/match/{resume_id}``.
+    """
     os.makedirs("temp_uploads", exist_ok=True)
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.join("temp_uploads", unique_filename)
@@ -140,6 +174,8 @@ async def process_resume(
             await buffer.write(content)
             await buffer.flush()
             
+        # Right after the write, the file can be briefly locked (e.g. by antivirus on Windows),
+        # so poll until it becomes readable.
         max_retries = 20
         retry_delay = 0.1
         file_ready = False
@@ -155,7 +191,7 @@ async def process_resume(
                 await asyncio.sleep(retry_delay)
                 
         if not file_ready:
-            raise HTTPException(status_code=500, detail="시스템 지연으로 파일을 열 수 없습니다.")
+            raise HTTPException(status_code=500, detail="The file could not be opened due to a system delay.")
 
         async with parse_semaphore: 
             try:
@@ -177,6 +213,7 @@ async def process_resume(
                         "parsed_text_preview": str(text_content)
                     }
 
+                # get_embedding may return a coroutine or a plain value, so handle both.
                 res = ai_service.get_embedding(text_content)
                 if asyncio.iscoroutine(res):
                     resume_vector = await res
@@ -204,8 +241,8 @@ async def process_resume(
                 
             except Exception as e:
                 traceback.print_exc()
-                print(f"❌ 파싱/저장 오류: {e}")
-                raise HTTPException(status_code=500, detail="분석 실패")
+                print(f"Parsing/saving error: {e}")
+                raise HTTPException(status_code=500, detail="Analysis failed")
     finally:
         if os.path.exists(file_path):
             try:
@@ -221,6 +258,12 @@ async def match_jobs(
     types: Optional[List[str]] = Query(None),
     skills: Optional[List[str]] = Query(None)
 ):
+    """Return the top 10 job matches for a stored resume.
+
+    Pipeline: Redis cache lookup -> vector similarity search (top 100 by cosine similarity, filtered
+    by location, experience level, employment type and skills) -> LLM re-ranking -> per-job
+    Korean/English match analysis (generated once and persisted) -> cache the result for one hour.
+    """
     filter_tag = f"{levels}_{types}_{skills}"
     cache_key = f"match_results:{resume_id}:{hashlib.md5(filter_tag.encode()).hexdigest()}"
     
@@ -230,7 +273,7 @@ async def match_jobs(
             if cached:
                 return json.loads(cached)
         except Exception as e:
-            print(f"Redis 읽기 오류: {e}")
+            print(f"Redis read error: {e}")
 
     stmt = select(models.JobPosting).filter(models.JobPosting.id == resume_id)
     result = await db.execute(stmt)
@@ -238,6 +281,7 @@ async def match_jobs(
     if not resume: 
         raise HTTPException(status_code=404, detail="Resume not found")
 
+    # "North America" (or its variants) expands to every hub city; otherwise match the exact location.
     loc_clean = str(resume.location).strip().lower() if resume.location else ""
     if loc_clean in ["north america", "northamerica", "na"]:
         search_locs = job_collector.NA_HUBS
@@ -270,6 +314,7 @@ async def match_jobs(
     jobs_only = [c[0] for c in candidates]
     scores_dict = {c[0].id: c[1] for c in candidates}
     
+    # The LLM returns indices into jobs_only in priority order; only the top 10 are returned.
     order = await ai_service.rerank_jobs(resume.description, jobs_only, preferred_skills=skills)
     
     results = []
@@ -285,6 +330,7 @@ async def match_jobs(
         analysis_res = await db.execute(analysis_stmt)
         analysis = analysis_res.scalars().first()
 
+        # Analyses are cached in the DB per (resume, job) pair to avoid repeated LLM calls.
         if not analysis:
             ko = await ai_service.analyze_match(resume.description, job.description, lang="ko")
             en = await ai_service.analyze_match(resume.description, job.description, lang="en")
@@ -313,14 +359,16 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LEGACY_DIR = os.path.join(_BASE_DIR, "static")
 _FRONTEND_DIST = os.path.join(_BASE_DIR, "frontend", "dist")
 
-# 정적 마운트는 반드시 모든 API 라우트 등록 이후(파일 맨 끝)에 위치해야 API가 가려지지 않는다.
-# 기존 static UI는 /legacy 로 항상 접근 가능(비교/롤백용).
+# Static mounts must come after all API routes are registered (end of file); otherwise they would shadow the API.
+# The old static UI is always reachable at /legacy (for comparison and rollback).
 @app.get("/legacy", include_in_schema=False)
 async def legacy_redirect():
+    """Redirect ``/legacy`` to ``/legacy/`` so that relative asset paths in the static UI resolve."""
     return RedirectResponse(url="/legacy/")
 
 app.mount("/legacy", StaticFiles(directory=_LEGACY_DIR, html=True), name="legacy")
 
+# Serve the built React dashboard at "/" when available; otherwise fall back to the legacy UI.
 if os.path.isfile(os.path.join(_FRONTEND_DIST, "index.html")):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
 else:

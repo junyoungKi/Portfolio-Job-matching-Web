@@ -1,3 +1,8 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Salary parsing utilities used for sorting match results by salary.
+ */
 import type { JobMatch } from '../types'
 
 /**
@@ -24,6 +29,7 @@ export function parseSalary(raw: string | null | undefined): number | null {
   return max
 }
 
+/** Whether at least one job has a salary that can be parsed, i.e. whether sorting by salary is meaningful. */
 export function hasSalaryData(jobs: JobMatch[]): boolean {
   return jobs.some((j) => parseSalary(j.salary) !== null)
 }

@@ -1,9 +1,19 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Sticky top navigation bar.
+ *
+ * Shows the brand, the total number of analysed jobs, the KO/EN language switch, the theme switcher
+ * (single cycling button on mobile, segmented control on larger screens) and the mobile filter button
+ * with a badge for the number of active filters.
+ */
 import { Database, LineChart, Monitor, Moon, SlidersHorizontal, Sun } from 'lucide-react'
 import type { RefObject } from 'react'
 import type { Translation } from '../lib/i18n'
 import type { ThemePref } from '../lib/theme'
 import type { Lang } from '../types'
 
+/** Props of `Header`. */
 interface Props {
   t: Translation
   lang: Lang
@@ -16,9 +26,11 @@ interface Props {
   filterTriggerRef: RefObject<HTMLButtonElement | null>
 }
 
+/** Shared classes for the segmented-control buttons (language and theme). */
 const segmentBase =
   'inline-flex items-center justify-center rounded-md text-xs font-semibold transition-colors'
 
+/** Application header with brand, job counter, language/theme switches and the mobile filter trigger. */
 export function Header({
   t,
   lang,
@@ -73,6 +85,7 @@ export function Header({
               type="button"
               onClick={() => onLangChange(code)}
               aria-pressed={lang === code}
+              // Each language is labelled in its own language, as is conventional for a language switch.
               aria-label={code === 'ko' ? '한국어' : 'English'}
               className={`${segmentBase} h-8 px-2.5 whitespace-nowrap ${
                 lang === code ? 'bg-surface text-fg shadow-sm' : 'text-muted hover:text-fg'

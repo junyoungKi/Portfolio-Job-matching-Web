@@ -1,9 +1,15 @@
 # run.py
+"""
+Author: Joonyoung Ki
+
+Local development entry point: starts the FastAPI app (``app.main:app``) with uvicorn on
+127.0.0.1:8000. Run it with ``python run.py``.
+"""
 import uvicorn
 import asyncio
 import sys
 
 if __name__ == "__main__":
     
-    # reload=False로 설정하여 윈도우 루프 충돌을 방지합니다.
+    # Set reload=False to avoid event-loop conflicts on Windows.
     uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=False)

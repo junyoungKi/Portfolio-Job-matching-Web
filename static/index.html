@@ -1,4 +1,11 @@
 <!DOCTYPE html>
+<!--
+    Author: Joonyoung Ki
+
+    Legacy static UI of Smart Job AI (served at /legacy, and at / when the React build is absent).
+    A single page with the resume upload form, advanced filters (level, type, skills) and the match
+    result list. Behavior and the ko/en language switch are implemented in js/main.ts (compiled to js/main.js).
+-->
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -23,7 +30,7 @@
             <div class="flex flex-col items-end gap-3">
                 <select id="langSelect" onchange="handleLanguageChange()" class="bg-gray-800 border border-gray-700 rounded-lg text-[10px] px-2 py-1 text-blue-400 font-bold outline-none">
                     <option value="ko">KOREAN (한국어)</option>
-                    <option value="en">ENGLISH (영어)</option>
+                    <option value="en">ENGLISH (English)</option>
                 </select>
                 <div class="text-right">
                     <div id="totalJobs" class="text-3xl font-black text-white italic">---</div>

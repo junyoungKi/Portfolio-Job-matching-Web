@@ -1,3 +1,12 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Root component of the Smart Job AI dashboard.
+ *
+ * Owns all application state (language, theme, form inputs, filters, results) and the data flow:
+ * upload a resume -> store it via ``/process-resume`` -> fetch matches via ``/match/{id}`` -> render them.
+ * Also manages the mobile filter drawer (focus handling, Escape to close, scroll lock) and aborts stale requests.
+ */
 import { AlertCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FilterPanel } from './components/FilterPanel'
@@ -13,12 +22,14 @@ import type { Translation } from './lib/i18n'
 import { DEFAULT_FILTERS } from './types'
 import type { Filters, Lang, ResultsState } from './types'
 
+/** Pick the initial UI language: the saved choice, otherwise Korean for Korean browsers and English for the rest. */
 function initialLang(): Lang {
   const saved = localStorage.getItem('lang')
   if (saved === 'ko' || saved === 'en') return saved
   return navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en'
 }
 
+/** Map an API failure to a localized, user-friendly message (network, not found, or generic server error). */
 function describeError(e: unknown, t: Translation): string {
   if (e instanceof ApiError) {
     if (e.status === 0) return t.errNetwork
@@ -27,6 +38,7 @@ function describeError(e: unknown, t: Translation): string {
   return t.errServer
 }
 
+/** Dashboard page: header, hero, filter sidebar/drawer, upload form, stat cards and match list. */
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang)
   const t = translations[lang]
@@ -47,8 +59,10 @@ export default function App() {
   const filterTriggerRef = useRef<HTMLButtonElement>(null)
   const filterCloseRef = useRef<HTMLButtonElement>(null)
 
+/** Total number of selected filter options (shown as a badge on the mobile filter button). */
   const activeFilterCount = filters.levels.length + filters.types.length + filters.skills.length
 
+/** Close the mobile filter drawer and return focus to the button that opened it. */
   const closeFilters = useCallback(() => {
     setFiltersOpen((wasOpen) => {
       if (wasOpen) filterTriggerRef.current?.focus()
@@ -56,6 +70,7 @@ export default function App() {
     })
   }, [])
 
+  // While the drawer is open: focus its close button, close on Escape and lock page scroll on mobile.
   useEffect(() => {
     if (!filtersOpen) return
     filterCloseRef.current?.focus()
@@ -72,13 +87,16 @@ export default function App() {
     }
   }, [filtersOpen, closeFilters])
 
+/** True while an upload or match request is in flight. */
   const loading = results.status === 'loading'
 
+  // Persist the language and mirror it on <html lang> for accessibility.
   useEffect(() => {
     localStorage.setItem('lang', lang)
     document.documentElement.lang = lang
   }, [lang])
 
+/** Reload the total job count; failures are ignored because the counter is not critical. */
   const refreshStats = useCallback(() => {
     fetchStats()
       .then((data) => setTotalJobs(data.total_jobs))
@@ -87,6 +105,7 @@ export default function App() {
       })
   }, [])
 
+  // Load the job counter once on mount.
   useEffect(() => {
     const controller = new AbortController()
     fetchStats(controller.signal)
@@ -97,8 +116,10 @@ export default function App() {
     return () => controller.abort()
   }, [])
 
+  // Abort any in-flight request when the component unmounts.
   useEffect(() => () => abortRef.current?.abort(), [])
 
+/** Fetch matches for a stored resume and reset per-card state; remembers which skills were applied for highlighting. */
   const loadMatches = useCallback(
     async (id: number, activeFilters: Filters, signal: AbortSignal) => {
       const matches = await fetchMatches(id, activeFilters, signal)
@@ -109,6 +130,7 @@ export default function App() {
     [],
   )
 
+/** Run an async job as the single active request: abort the previous one, show the loading state, map errors to the error state and refresh the stats afterwards. */
   const run = useCallback(
     async (job: (signal: AbortSignal) => Promise<void>) => {
       abortRef.current?.abort()
@@ -128,6 +150,7 @@ export default function App() {
     [refreshStats, t],
   )
 
+/** Validate the form, upload the resume, then load its matches. */
   const handleSubmit = () => {
     const trimmed = keyword.trim()
     if (!file || !trimmed) {
@@ -141,17 +164,20 @@ export default function App() {
     })
   }
 
+/** Re-fetch matches for the already stored resume with the current filters (no new upload). */
   const handleReapply = () => {
     if (resumeId === null) return
     void run((signal) => loadMatches(resumeId, filters, signal))
   }
 
+/** Store the selected file; a new file invalidates the previously stored resume. */
   const handleFile = (next: File | null) => {
     setFile(next)
     setFormError(null)
     setResumeId(null)
   }
 
+/** Show or hide a match card's detail panel. */
   const toggleOpen = (key: string) =>
     setOpenKeys((prev) => {
       const next = new Set(prev)

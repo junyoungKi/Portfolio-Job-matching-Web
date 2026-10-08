@@ -1,3 +1,10 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * ESLint flat configuration for the frontend.
+ *
+ * Applies the recommended JavaScript, TypeScript, React Hooks and React Refresh rule sets to all TS/TSX files.
+ */
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'

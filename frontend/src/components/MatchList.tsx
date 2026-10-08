@@ -1,3 +1,11 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Results panel.
+ *
+ * Renders the idle, loading (skeleton), error, empty and success states, and for successful results
+ * offers sorting by match score or by salary.
+ */
 import { ArrowUpDown, RotateCw } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -8,6 +16,7 @@ import type { JobMatch, Lang, ResultsState } from '../types'
 import { ErrorIllustration, IdleIllustration, NoResultIllustration } from './Illustrations'
 import { MatchCard } from './MatchCard'
 
+/** Props of `MatchList`. */
 interface Props {
   t: Translation
   lang: Lang
@@ -19,8 +28,10 @@ interface Props {
   canRetry: boolean
 }
 
+/** Available sort orders for the results. */
 type SortKey = 'score' | 'salary'
 
+/** Centered placeholder with an illustration, title, optional body text and optional action button. */
 function EmptyState({
   illustration,
   title,
@@ -42,6 +53,7 @@ function EmptyState({
   )
 }
 
+/** Shimmering placeholder cards shown while results are loading. */
 function Skeleton() {
   return (
     <div className="space-y-4" aria-hidden="true">
@@ -68,6 +80,11 @@ function Skeleton() {
   )
 }
 
+/**
+ * Return a sorted copy of the matches.
+ *
+ * Salary sorting puts jobs without a parsable salary last; ties fall back to the match score.
+ */
 function sortMatches(matches: JobMatch[], sort: SortKey): JobMatch[] {
   const copy = [...matches]
   if (sort === 'salary') {
@@ -85,6 +102,7 @@ function sortMatches(matches: JobMatch[], sort: SortKey): JobMatch[] {
   return copy
 }
 
+/** Results section whose content depends on the request state (`idle`, `loading`, `error`, `success`). */
 export function MatchList({ t, lang, state, openKeys, selectedSkills, onToggle, onRetry, canRetry }: Props) {
   const [sortPref, setSortPref] = useState<SortKey>('score')
   const matches = state.status === 'success' ? state.matches : null

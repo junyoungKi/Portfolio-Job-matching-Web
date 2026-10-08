@@ -1,6 +1,16 @@
 // static/js/main.ts
+/**
+ * Author: Joonyoung Ki
+ *
+ * Client-side logic of the legacy static UI (served at /legacy).
+ *
+ * Handles the Korean/English language switch, resume upload, the calls to the
+ * /stats, /process-resume and /match/{id} API endpoints, and rendering of the match result cards.
+ * It is compiled to static/js/main.js with `tsc`, which is the file index.html actually loads.
+ */
 export {}; 
 
+/** UI text keys that every language dictionary must provide. */
 interface Translation {
     title: string; subtitle: string; statsLabel: string;
     keywordPlaceholder: string; resumeLabel: string;
@@ -13,6 +23,7 @@ interface Translation {
     matchError: string; alertFill: string;
 }
 
+/** One match result as returned by GET /match/{resume_id}. */
 interface JobMatch {
     title: string; company: string; location: string;
     salary: string; match_score: number;
@@ -21,7 +32,9 @@ interface JobMatch {
     skills: string;
 }
 
+/** UI text dictionaries keyed by language code ("ko" = Korean, "en" = English). */
 const translations: Record<string, Translation> = {
+    // The Korean values below are intentionally kept in Korean: they are the product's Korean UI texts.
     ko: {
         title: "스마트 잡 AI", subtitle: "북미 커리어 매칭 시스템", statsLabel: "데이터베이스 공고 수",
         keywordPlaceholder: "희망 직무 (예: C++ 개발자)", resumeLabel: "이력서 업로드 (PDF)", 
@@ -46,9 +59,12 @@ const translations: Record<string, Translation> = {
     }
 };
 
+/** Latest match results, kept so they can be re-rendered when the language changes. */
 let currentMatches: JobMatch[] = [];
+/** Indices of the result cards whose detail panel is currently expanded. */
 let openIndices: Set<number> = new Set();
 
+/** Fetch the total number of jobs from /stats and show it in the header counter. */
 const updateStats = async (): Promise<void> => {
     try {
         const res = await fetch('/stats');
@@ -58,11 +74,13 @@ const updateStats = async (): Promise<void> => {
     } catch (e) { console.error(e); }
 };
 
+/** Apply the selected language's texts to every translatable element on the page. */
 const changeUI = (): void => {
     const langSelect = document.getElementById('langSelect') as HTMLSelectElement;
     const lang = langSelect.value;
     const t = translations[lang];
 
+    /** Set the text of the element with the given id, ignoring ids that are missing from the page. */
     const updateText = (id: string, text: string) => {
         const el = document.getElementById(id);
         if (el) el.innerText = text;
@@ -85,7 +103,7 @@ const changeUI = (): void => {
     updateText('opt-exp-mid', t.expMid);
     updateText('opt-type-full', t.typeFull);
     updateText('opt-type-intern', t.typeIntern);
-    updateText('opt-type-contract', t.typeContract); // 🎯 계약직 번역 적용
+    updateText('opt-type-contract', t.typeContract); // Apply the Contract translation
     updateText('btn-file-custom', t.btnFile);
 
     const keywordInput = document.getElementById('jobKeyword') as HTMLInputElement;
@@ -98,7 +116,7 @@ const changeUI = (): void => {
     }
 };
 
-// ... (handleFileSelect, processAll, fetchMatches 로직 동일하므로 생략 - 파일 참조) ...
+/** Show the chosen resume file name (or the localized "no file" text) next to the file picker. */
 const handleFileSelect = (): void => {
     const input = document.getElementById('resumeFile') as HTMLInputElement;
     const display = document.getElementById('file-name-display');
@@ -113,6 +131,10 @@ const handleFileSelect = (): void => {
     }
 };
 
+/**
+ * Upload the selected resume with the entered role and location to /process-resume,
+ * then load the matches for the stored resume. Alerts when required input is missing.
+ */
 const processAll = async (): Promise<void> => {
     const fileInput = document.getElementById('resumeFile') as HTMLInputElement;
     const keywordInput = document.getElementById('jobKeyword') as HTMLInputElement;
@@ -130,7 +152,9 @@ const processAll = async (): Promise<void> => {
     } finally { document.getElementById('status')?.classList.add('hidden'); updateStats(); }
 };
 
+/** Request /match/{resumeId} using the ticked level/type/skill filters and render the results. */
 const fetchMatches = async (resumeId: number): Promise<void> => {
+    /** Collect the values of all checked checkboxes with the given input name. */
     const getCheckedValues = (name: string) => Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(el => (el as HTMLInputElement).value);
     let url = `/match/${resumeId}?`;
     getCheckedValues("level").forEach(v => url += `levels=${encodeURIComponent(v)}&`);
@@ -143,6 +167,7 @@ const fetchMatches = async (resumeId: number): Promise<void> => {
     } catch (e) { console.error(e); }
 };
 
+/** Render the match result cards in the selected language, or an empty-state message if there are none. */
 const displayResults = (matches: JobMatch[]): void => {
     const list = document.getElementById('matchList');
     const lang = (document.getElementById('langSelect') as HTMLSelectElement).value;
@@ -179,6 +204,7 @@ const displayResults = (matches: JobMatch[]): void => {
     `}).join('');
 };
 
+/** Expand or collapse the detail panel of one result card and remember its state across re-renders. */
 const toggleDetail = (idx: number): void => {
     const el = document.getElementById(`detail-${idx}`);
     if (!el) return;
@@ -187,10 +213,13 @@ const toggleDetail = (idx: number): void => {
     else openIndices.add(idx);
 };
 
+/** Initial page setup: load the job count and apply the default language. */
 const init = (): void => { updateStats(); changeUI(); };
+/** Re-translate the UI and re-render any existing results when the language selector changes. */
 const handleLanguageChange = (): void => { changeUI(); if (currentMatches.length > 0) displayResults(currentMatches); };
 
 window.addEventListener('DOMContentLoaded', init);
+// Expose the handlers on window because index.html calls them from inline onclick/onchange attributes.
 (window as any).init = init;
 (window as any).handleLanguageChange = handleLanguageChange;
 (window as any).processAll = processAll;

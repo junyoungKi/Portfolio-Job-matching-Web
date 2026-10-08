@@ -1,3 +1,13 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Client-side logic of the legacy static UI (served at /legacy), loaded by index.html.
+ *
+ * Handles the Korean/English language switch, resume upload, the calls to the
+ * /stats, /process-resume and /match/{id} API endpoints, and rendering of the match result cards.
+ * Note: this file is the compiled output of main.ts. It is kept in sync by hand because the
+ * committed build was generated from an earlier revision of main.ts.
+ */
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -7,7 +17,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+/** UI text dictionaries keyed by language code ("ko" = Korean, "en" = English). */
 const translations = {
+    // The Korean values below are intentionally kept in Korean: they are the product's Korean UI texts.
     ko: {
         title: "스마트 잡 AI", subtitle: "북미 커리어 매칭 시스템", statsLabel: "데이터베이스 공고 수",
         keywordPlaceholder: "희망 직무 (예: C++ 개발자)", resumeLabel: "이력서 업로드 (PDF)",
@@ -31,8 +43,11 @@ const translations = {
         matchError: "No matching results found.", alertFill: "Please fill in all required fields!"
     }
 };
+/** Latest match results, kept so they can be re-rendered when the language changes. */
 let currentMatches = [];
+/** Indices of the result cards whose detail panel is currently expanded. */
 let openIndices = new Set();
+/** Fetch the total number of jobs from /stats and show it in the header counter. */
 const updateStats = () => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const res = yield fetch('/stats');
@@ -45,11 +60,13 @@ const updateStats = () => __awaiter(void 0, void 0, void 0, function* () {
         console.error("Stats error", e);
     }
 });
+/** Apply the selected language's texts to every translatable element on the page. */
 const changeUI = () => {
     var _a;
     const langSelect = document.getElementById('langSelect');
     const lang = langSelect.value;
     const t = translations[lang];
+    /** Set the text of the element with the given id, ignoring ids that are missing from the page. */
     const updateText = (id, text) => {
         const el = document.getElementById(id);
         if (el)
@@ -82,6 +99,7 @@ const changeUI = () => {
         nameDisplay.innerText = t.noFile;
     }
 };
+/** Show the chosen resume file name (or the localized "no file" text) next to the file picker. */
 const handleFileSelect = () => {
     const input = document.getElementById('resumeFile');
     const display = document.getElementById('file-name-display');
@@ -96,6 +114,10 @@ const handleFileSelect = () => {
         display.classList.add('text-gray-500', 'italic');
     }
 };
+/**
+ * Upload the selected resume with the entered role and location to /process-resume,
+ * then load the matches for the stored resume. Alerts when required input is missing.
+ */
 const processAll = () => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     const fileInput = document.getElementById('resumeFile');
@@ -123,7 +145,9 @@ const processAll = () => __awaiter(void 0, void 0, void 0, function* () {
         updateStats();
     }
 });
+/** Request /match/{resumeId} using the ticked level/type/skill filters and render the results. */
 const fetchMatches = (resumeId) => __awaiter(void 0, void 0, void 0, function* () {
+    /** Collect the values of all checked checkboxes with the given input name. */
     const getCheckedValues = (name) => Array.from(document.querySelectorAll(`input[name="${name}"]:checked`))
         .map(el => el.value);
     let url = `/match/${resumeId}?`;
@@ -137,6 +161,7 @@ const fetchMatches = (resumeId) => __awaiter(void 0, void 0, void 0, function* (
     }
     finally { }
 });
+/** Render the match result cards in the selected language, or an empty-state message if there are none. */
 const displayResults = (matches) => {
     var _a;
     const list = document.getElementById('matchList');
@@ -178,6 +203,7 @@ const displayResults = (matches) => {
     `;
     }).join('');
 };
+/** Expand or collapse the detail panel of one result card and remember its state across re-renders. */
 const toggleDetail = (idx) => {
     const el = document.getElementById(`detail-${idx}`);
     if (!el)
@@ -188,12 +214,14 @@ const toggleDetail = (idx) => {
     else
         openIndices.add(idx);
 };
+/** Initial page setup: load the job count and apply the default language. */
 const init = () => { updateStats(); changeUI(); };
+/** Re-translate the UI and re-render any existing results when the language selector changes. */
 const handleLanguageChange = () => { changeUI(); if (currentMatches.length > 0)
     displayResults(currentMatches); };
-// 🎯 페이지 로드 시 자동 실행
+// Run the initial setup automatically once the page has loaded.
 window.addEventListener('DOMContentLoaded', init);
-// 전역 스코프 노출
+// Expose the handlers on window because index.html calls them from inline onclick/onchange attributes.
 window.init = init;
 window.handleLanguageChange = handleLanguageChange;
 window.processAll = processAll;

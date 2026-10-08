@@ -1,3 +1,6 @@
+// Author: Joonyoung Ki
+//
+// TypeScript configuration for the legacy static UI: compiles static/js/main.ts into static/js/main.js.
 {
   "compilerOptions": {
     "target": "ES6",
@@ -10,6 +13,6 @@
   },
   "exclude": [
     "node_modules",
-    "**/*.js"  // 🎯 모든 .js 파일을 컴파일 대상에서 제외하여 충돌을 방지합니다.
+    "**/*.js"  // Exclude all .js files from compilation to prevent conflicts.
   ]
 }

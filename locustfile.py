@@ -1,7 +1,17 @@
+"""
+Author: Joonyoung Ki
+
+Locust load-test definition for the Smart Job AI API.
+
+Simulates users that poll ``/stats`` (database read) and upload a resume to ``/process-resume``
+(file I/O plus AI analysis, the expected bottleneck). Run it with ``locust -f locustfile.py``.
+"""
 import os
 from locust import HttpUser, task, between
 
 class SmartJobUser(HttpUser):
+    """Virtual user that mixes lightweight stats reads with heavier resume uploads."""
+
     # Wait time between tasks for each virtual user (random between 1 and 3 seconds)
     wait_time = between(1, 3)
 

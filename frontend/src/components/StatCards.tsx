@@ -1,3 +1,11 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Summary statistic cards.
+ *
+ * Shows the total jobs in the database, the number of matched jobs, and the average and best match
+ * scores of the current results.
+ */
 import type { CSSProperties } from 'react'
 import { BarChart3, Database, ListChecks, Trophy } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -5,12 +13,14 @@ import type { Translation } from '../lib/i18n'
 import { clampPct } from '../lib/score'
 import type { ResultsState } from '../types'
 
+/** Props of `StatCards`. */
 interface Props {
   t: Translation
   totalJobs: number | null
   state: ResultsState
 }
 
+/** Props of a single `StatCard`. */
 interface CardProps {
   label: string
   hint: string
@@ -21,6 +31,7 @@ interface CardProps {
   index: number
 }
 
+/** Colour classes for the icon badge of each card tone. */
 const toneClass: Record<CardProps['tone'], string> = {
   brand: 'bg-brand-soft text-brand-text',
   ok: 'bg-ok-soft text-ok',
@@ -28,6 +39,7 @@ const toneClass: Record<CardProps['tone'], string> = {
   neutral: 'bg-surface-2 text-muted',
 }
 
+/** A single statistic tile with a label, value (or skeleton while loading), icon and hint. */
 function StatCard({ label, hint, value, icon: Icon, tone, loading, index }: CardProps) {
   return (
     <div
@@ -50,6 +62,7 @@ function StatCard({ label, hint, value, icon: Icon, tone, loading, index }: Card
   )
 }
 
+/** Row of four statistic tiles derived from the total job count and the current results state. */
 export function StatCards({ t, totalJobs, state }: Props) {
   const loading = state.status === 'loading'
   const matches = state.status === 'success' ? state.matches : null

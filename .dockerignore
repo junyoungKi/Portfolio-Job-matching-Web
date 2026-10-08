@@ -1,3 +1,8 @@
+# Author: Joonyoung Ki
+#
+# Files excluded from the Docker build context: secrets, VCS data, caches, local build output and other
+# files that the image does not need.
+
 .git
 .gitignore
 .env
@@ -17,7 +22,7 @@ htmlcov/
 *.log
 temp_uploads/
 
-# Frontend (Docker 빌드 스테이지에서 새로 설치/빌드)
+# Frontend (installed and built from scratch in the Docker build stage)
 frontend/node_modules/
 frontend/dist/
 node_modules/
@@ -30,7 +35,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# 이미지에 불필요한 파일
+# Files not needed in the image
 *.jpeg
 *.png
 docker-compose*.yml

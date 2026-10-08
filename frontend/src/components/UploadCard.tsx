@@ -1,3 +1,11 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Upload form card.
+ *
+ * Combines the stepper, the resume dropzone, the target-role and location inputs and the submit button,
+ * and derives the stepper state from the form and request status.
+ */
 import { ArrowRight, Briefcase, MapPin } from 'lucide-react'
 import type { FormEvent } from 'react'
 import type { Translation } from '../lib/i18n'
@@ -6,6 +14,7 @@ import { FileDropzone } from './FileDropzone'
 import { Stepper } from './Stepper'
 import type { StepStatus } from './Stepper'
 
+/** Props of `UploadCard`. */
 interface Props {
   t: Translation
   file: File | null
@@ -20,9 +29,11 @@ interface Props {
   onSubmit: () => void
 }
 
+/** Shared Tailwind classes for the text input and the select. */
 const fieldClass =
   'h-11 w-full rounded-lg border border-line-strong bg-surface pl-10 pr-3 text-sm text-fg placeholder:text-subtle transition-shadow focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand-soft disabled:opacity-60'
 
+/** Numbered heading for a form section, with an optional hint on larger screens. */
 function StepHeading({ n, title, hint }: { n: number; title: string; hint?: string }) {
   return (
     <div className="mb-3 flex items-baseline gap-2.5">
@@ -35,10 +46,12 @@ function StepHeading({ n, title, hint }: { n: number; title: string; hint?: stri
   )
 }
 
+/** Three-section form (upload, preferences, start analysis) that submits through `onSubmit`. */
 export function UploadCard(props: Props) {
   const { t, file, keyword, location, loading, hasResults } = props
   const hasKeyword = keyword.trim() !== ''
 
+  // Derive the stepper state from how far the user has progressed.
   let statuses: [StepStatus, StepStatus, StepStatus]
   if (hasResults) statuses = ['done', 'done', 'done']
   else if (loading) statuses = ['done', 'done', 'current']
@@ -46,6 +59,7 @@ export function UploadCard(props: Props) {
   else if (!hasKeyword) statuses = ['done', 'current', 'upcoming']
   else statuses = ['done', 'done', 'current']
 
+/** Prevent the native form submission and delegate to the parent handler. */
   const submit = (e: FormEvent) => {
     e.preventDefault()
     props.onSubmit()

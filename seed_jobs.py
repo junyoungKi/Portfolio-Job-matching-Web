@@ -1,8 +1,15 @@
+"""
+Author: Joonyoung Ki
+
+Seed script that inserts a handful of realistic sample job postings (with embeddings) into the
+database so that the matching pipeline can be tried without running the crawler.
+"""
 import asyncio
 from app.database import SessionLocal
 from app.models import JobPosting
 from app.services.ai import ai_service
 
+# Sample postings (game, aerospace, GPU and cloud roles) used as seed data.
 REALISTIC_JOBS = [
     {
         "title": "Senior Graphics Programmer (RAGE Engine)",
@@ -37,6 +44,7 @@ REALISTIC_JOBS = [
 ]
 
 async def seed():
+    """Embed each sample posting and save it to the database."""
     db = SessionLocal()
     for job in REALISTIC_JOBS:
         print(f"Embedding & Saving: {job['company']} - {job['title']}...")

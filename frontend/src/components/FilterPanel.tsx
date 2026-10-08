@@ -1,9 +1,18 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Filter sidebar (desktop) / slide-in drawer (mobile).
+ *
+ * Lets the user choose experience levels, employment types and key skills, reapply them to the stored
+ * resume's results, or reset them to the defaults.
+ */
 import { Check, RotateCcw, SlidersHorizontal, X } from 'lucide-react'
 import type { RefObject } from 'react'
 import type { Translation } from '../lib/i18n'
 import { DEFAULT_FILTERS, LEVEL_OPTIONS, SKILL_OPTIONS, TYPE_OPTIONS } from '../types'
 import type { Filters } from '../types'
 
+/** Props of `FilterPanel`. */
 interface Props {
   t: Translation
   filters: Filters
@@ -17,10 +26,12 @@ interface Props {
   onClose: () => void
 }
 
+/** Return a copy of `list` with `value` removed if present, otherwise added. */
 function toggle(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
 }
 
+/** Props of `CheckGroup`. */
 interface GroupProps {
   label: string
   name: string
@@ -32,6 +43,7 @@ interface GroupProps {
   onToggle: (value: string) => void
 }
 
+/** A labelled group of checkboxes, rendered as a vertical list or as pill-shaped chips. */
 function CheckGroup({ label, name, options, selected, display, disabled, chips, onToggle }: GroupProps) {
   return (
     <fieldset disabled={disabled} className="min-w-0">
@@ -80,6 +92,7 @@ function CheckGroup({ label, name, options, selected, display, disabled, chips, 
   )
 }
 
+/** Responsive filter wrapper: sticky sidebar on large screens, off-canvas drawer with backdrop on small ones. */
 export function FilterPanel({
   t,
   filters,

@@ -1,11 +1,20 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Landing hero section.
+ *
+ * Presents the headline and key selling points, plus (on large screens) a decorative sample match card.
+ */
 import { CheckCircle2, Sparkles } from 'lucide-react'
 import type { Translation } from '../lib/i18n'
 import { ScoreGauge } from './ScoreGauge'
 
+/** Props of `Hero`. */
 interface Props {
   t: Translation
 }
 
+/** Hero banner with a localized headline, feature list and an illustrative, non-interactive preview card. */
 export function Hero({ t }: Props) {
   return (
     <section id="top" className="hero-bg relative overflow-hidden border-b border-line">

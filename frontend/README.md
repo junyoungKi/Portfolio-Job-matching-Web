@@ -1,3 +1,9 @@
+<!--
+  Author: Joonyoung Ki
+
+  README of the React dashboard in frontend/: stack, how to run and build it, configuration,
+  the API it uses, the source layout and the design system.
+-->
 # Smart Job AI - Frontend (React + Vite + Tailwind CSS)
 
 Dashboard UI for the job-matching backend (FastAPI, `app/main.py`). It ports the behaviour of the

@@ -1,7 +1,16 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Inline SVG illustrations for the empty, no-result and error states of the results panel.
+ *
+ * They use theme CSS variables, so they follow the light/dark theme automatically.
+ */
+/** Props shared by the illustration components. */
 interface Props {
   className?: string
 }
 
+/** Illustration shown before any analysis has been run (resume with a magnifier). */
 export function IdleIllustration({ className }: Props) {
   return (
     <svg viewBox="0 0 240 180" className={className} fill="none" aria-hidden="true">
@@ -25,6 +34,7 @@ export function IdleIllustration({ className }: Props) {
   )
 }
 
+/** Illustration shown when the analysis returned no matching jobs. */
 export function NoResultIllustration({ className }: Props) {
   return (
     <svg viewBox="0 0 240 180" className={className} fill="none" aria-hidden="true">
@@ -43,6 +53,7 @@ export function NoResultIllustration({ className }: Props) {
   )
 }
 
+/** Illustration shown when loading the results failed (warning triangle). */
 export function ErrorIllustration({ className }: Props) {
   return (
     <svg viewBox="0 0 240 180" className={className} fill="none" aria-hidden="true">

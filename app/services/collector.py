@@ -1,10 +1,22 @@
-# app/services/collector.py 수정본
+# app/services/collector.py
+"""
+Author: Joonyoung Ki
+
+LinkedIn job collector.
+
+Uses Playwright (headless Chromium) to scrape public LinkedIn job search results and detail pages
+for a keyword and city. Randomised delays and block detection are used to behave like a normal user
+and to stop gracefully when LinkedIn redirects to a login or checkpoint page.
+"""
 import asyncio
 import random
 from playwright.async_api import async_playwright
 
 class JobCollector:
+    """Scrapes job postings from LinkedIn for the North American hub cities."""
+
     def __init__(self):
+        """Define ``NA_HUBS``, the list of cities that "North America" expands to."""
         self.NA_HUBS = [
             "Vancouver, BC", "Toronto, ON", "Seattle, WA", 
             "San Francisco, CA", "Austin, TX", "New York, NY",
@@ -12,9 +24,16 @@ class JobCollector:
         ]
 
     async def scrape_linkedin(self, keyword: str, location: str, max_pages: int = 1):
+        """Collect postings for ``keyword`` in ``location``.
+
+        Each result page holds 25 cards. For every card the detail page is opened to read the full
+        description. Returns a list of dicts with title, company, description, location, salary
+        and url. A failure on one page stops the pagination, and a failure on one detail page
+        only skips that posting.
+        """
         jobs = []
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True) # 포트폴리오용이면 가끔 False로 디버깅 추천
+            browser = await p.chromium.launch(headless=True) # For a portfolio project, occasionally set this to False to debug visually
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
@@ -25,11 +44,11 @@ class JobCollector:
                 search_url = f"https://www.linkedin.com/jobs/search/?keywords={keyword}&location={location}&f_TPR=r604800&start={start_index}"
                 
                 try:
-                    # 1. 페이지 접속 대기 강화
+                    # 1. Wait more robustly for the search page to load
                     await page.goto(search_url, wait_until="load", timeout=60000)
                     await page.wait_for_selector(".base-card", timeout=15000)
                     
-                    # 스크롤을 천천히 내려서 더 많은 공고 로드
+                    # Scroll down slowly to load more postings
                     for _ in range(3):
                         await page.evaluate("window.scrollBy(0, 500)")
                         await asyncio.sleep(random.uniform(0.5, 1.0))
@@ -51,36 +70,36 @@ class JobCollector:
 
                     await page.close()
 
-                    # 상세 페이지 수집 루프
+                    # Loop that collects each detail page
                     for target in job_targets:
                         if any(j.get('url') == target['url'] for j in jobs): continue
                         
-                        # 2. 수집 간 랜덤 지연 시간 추가 (사람처럼 보이게)
+                        # 2. Add a random delay between requests (to look like a human)
                         await asyncio.sleep(random.uniform(2.0, 4.0)) 
                         
                         detail_page = await context.new_page()
                         try:
-                            print(f"🔎 상세 수집 중: {target['title']} @ {target['company']}")
+                            print(f"Collecting details: {target['title']} @ {target['company']}")
                             
-                            # 3. 상세 페이지 이동 및 리다이렉트 체크
+                            # 3. Navigate to the detail page and check for redirects
                             response = await detail_page.goto(target['url'], wait_until="load", timeout=30000)
                             
-                            # 로그인 페이지나 보안 확인 페이지로 튕겼는지 확인
+                            # Check whether we were bounced to a login or security checkpoint page
                             current_url = detail_page.url
                             if "login" in current_url or "checkpoint" in current_url:
-                                print(f"⚠️ 차단 감지(로그인 창으로 이동됨): {target['title']}")
+                                print(f"Block detected (redirected to a login page): {target['title']}")
                                 await detail_page.close()
                                 continue
 
-                            # 4. 요소 추출 시 끈질기게 대기 (Locator 사용 추천)
-                            # description 요소가 보일 때까지 최대 10초 대기
+                            # 4. Wait persistently when extracting elements (using a Locator is recommended)
+                            # Wait up to 10 seconds for the description element to appear
                             desc_selector = ".description__text, .show-more-less-html__markup"
                             try:
                                 await detail_page.wait_for_selector(desc_selector, timeout=10000)
                                 desc_el = await detail_page.query_selector(desc_selector)
                                 description = (await desc_el.inner_text()).strip() if desc_el else ""
                             except:
-                                description = f"{target['title']} 공고 상세 내용을 불러올 수 없습니다."
+                                description = f"Unable to load the job details for {target['title']}."
 
                             jobs.append({
                                 "title": target['title'],
@@ -91,21 +110,21 @@ class JobCollector:
                                 "url": target['url']
                             })
                         except Exception as e:
-                            # 5. 에러 메시지 상세화
+                            # 5. Make the error messages more specific
                             if "destroyed" in str(e):
-                                print(f"⚠️ 컨텍스트 파괴(리다이렉트 의심): {target['title']}")
+                                print(f"Execution context destroyed (suspected redirect): {target['title']}")
                             else:
-                                print(f"⚠️ 상세 실패: {e}")
+                                print(f"Detail page failed: {e}")
                         finally:
                             await detail_page.close()
                             
                 except Exception as e:
-                    print(f"❌ {location} 수집 실패: {e}")
+                    print(f"Collection failed for {location}: {e}")
                     await page.close()
                     break
 
             await browser.close()
         return jobs
     
-# 🎯 이 줄이 반드시 있어야 main.py에서 불러올 수 있습니다.
+# This line is required so that main.py can import the collector instance.
 job_collector = JobCollector()

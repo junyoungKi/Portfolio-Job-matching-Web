@@ -1,3 +1,7 @@
+# Author: Joonyoung Ki
+#
+# Local/server orchestration: the FastAPI web service (built from the Dockerfile, configured through .env)
+# and a Redis instance used as the match-result cache.
 services:
   web:
     build: .

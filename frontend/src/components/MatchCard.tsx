@@ -1,3 +1,11 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Card for a single matched job.
+ *
+ * Shows rank, title, company, location, salary, the AI summary, required skills (highlighting those the
+ * user selected as filters), a score gauge and an expandable detailed analysis in the current language.
+ */
 import { Banknote, Building2, Check, ChevronDown, MapPin } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { useId } from 'react'
@@ -7,6 +15,7 @@ import { parseSkills } from '../lib/skills'
 import type { JobMatch, Lang } from '../types'
 import { ScoreGauge } from './ScoreGauge'
 
+/** Props of `MatchCard`. */
 interface Props {
   t: Translation
   lang: Lang
@@ -18,6 +27,7 @@ interface Props {
   onToggle: () => void
 }
 
+/** One match result with an accessible show/hide detail section. */
 export function MatchCard({ t, lang, job, rank, index, open, selectedSkills, onToggle }: Props) {
   const detailId = useId()
   const summary = lang === 'ko' ? job.summary_ko : job.summary_en

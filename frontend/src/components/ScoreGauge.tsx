@@ -1,6 +1,12 @@
+/**
+ * Author: Joonyoung Ki
+ *
+ * Circular SVG gauge that displays a match percentage.
+ */
 import type { CSSProperties } from 'react'
 import { scoreColor } from '../lib/score'
 
+/** Props of `ScoreGauge`; `ariaLabel` is the accessible description of the score (empty for decorative use). */
 interface Props {
   pct: number
   size?: number
@@ -9,6 +15,7 @@ interface Props {
   ariaLabel: string
 }
 
+/** Animated circular gauge with the whole-number percentage and a caption in the centre; colour depends on the score. */
 export function ScoreGauge({ pct, size = 88, stroke = 8, label, ariaLabel }: Props) {
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r

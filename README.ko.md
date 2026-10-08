@@ -12,7 +12,7 @@ PDF 이력서를 올리면 북미 소프트웨어 채용공고 중 임베딩 유
 
 Joonyoung Ki 제작. 미국 대학 컴퓨터공학 전공 유학생이며, 백엔드 / 일반 SWE 직무를 목표로 합니다.
 
-- 라이브 데모: TODO(owner): URL 또는 "비공개"
+- 라이브 데모: <https://ai-job-matching.com>
 - 저장소: <https://github.com/junyoungKi/Portfolio-Job-matching-Web>
 
 ## 문제 정의
@@ -88,7 +88,7 @@ flowchart LR
 
 ## 핵심 설계 결정과 트레이드오프
 
-- **전 구간 async.** DB 계층은 SQLAlchemy async 엔진과 asyncpg, OpenAI 호출은 `AsyncOpenAI`를 씁니다. PDF 파싱은 동기 작업이라 스레드 실행기에서 돌려 이벤트 루프를 막지 않고, 세마포어(10)로 동시 파싱/임베딩 수를 제한합니다. 단점: `app/main.py`의 Redis 클라이언트는 동기식 `redis` 패키지라서 캐시 호출 동안 이벤트 루프가 잠깐 멈춥니다.
+- **전 구간 async.** DB 계층은 SQLAlchemy async 엔진과 asyncpg를, OpenAI 호출은 `AsyncOpenAI`를, 매칭 캐시는 애플리케이션 시작 시 만드는 `redis.asyncio` 클라이언트 하나를 씁니다. PDF 파싱은 동기 작업이라 스레드 실행기에서 돌려 이벤트 루프를 막지 않고, 세마포어(10)로 동시 파싱/임베딩 수를 제한합니다. 캐시 명령의 소켓 타임아웃은 5초라서 Redis가 멈춰도 요청이 무한정 열려 있지 않습니다.
 - **HNSW 인덱스.** `app/models.py`에 `m=16`, `ef_construction=64`, 코사인 연산자로 선언했습니다. HNSW는 근사 검색이고 단순 스캔보다 메모리와 빌드 시간이 더 들기 때문에, 공고가 많을 때 효과가 있습니다. 현재 `/match` 쿼리가 계산된 `1 - cosine_distance` 점수로 정렬하기 때문에 플래너가 이 인덱스를 실제로 쓰는지는 확인하지 않았습니다: TODO(owner): `EXPLAIN ANALYZE`를 실행해 결과를 기록하세요.
 - **검색 후 재정렬.** 벡터 검색으로 후보를 100개로 줄이고, LLM이 이력서 앞 500자와 각 공고의 제목, 회사, 기술 스택을 보고 순서를 정합니다. LLM 호출이 실패하면 벡터 유사도 순서를 그대로 씁니다. 단점: 요청마다 지연과 비용이 늘고, 재정렬 단계는 이력서 일부만 봅니다.
 - **Redis 캐시와 분석 결과 저장.** 이력서와 필터 조합별로 결과를 1시간 캐시합니다. KO/EN 분석은 `match_analyses`에 저장해 쌍마다 한 번만 생성합니다. 단점: 캐시된 결과가 최대 1시간 지난 데이터일 수 있습니다.
@@ -174,14 +174,20 @@ cd frontend && npm ci && npm run build && cd .. && python run.py
 ```bash
 # .env는 위와 같되, DATABASE_URL은 접근 가능한 pgvector PostgreSQL을 가리켜야 합니다
 docker compose up -d --build
-# http://localhost:8000 접속
+# http://localhost/ 와 http://localhost:8000 모두 앱에 연결됩니다
 ```
 
-`main`의 `docker-compose.yml`은 `web`과 `redis`만 띄우고 PostgreSQL은 포함하지 않습니다. 데이터베이스는 `DATABASE_URL`로 직접 지정해야 합니다. Dockerfile은 멀티 스테이지입니다 (Node 22로 대시보드 빌드, Python 3.11에서 크롤러용 Chromium과 함께 API 실행).
+`docker-compose.yml`은 `web`과 `redis`만 띄우고 PostgreSQL은 포함하지 않습니다. 데이터베이스는 `DATABASE_URL`로 직접 지정해야 합니다. `web`은 호스트 80번 포트와 8000번 포트를 모두 컨테이너 8000번 포트에 연결합니다. Dockerfile은 멀티 스테이지입니다. Node 22가 React 앱을 이미지에 빌드하고, Python 3.11이 uvicorn으로 FastAPI를 실행합니다. 크롤러용 Chromium도 포함됩니다.
 
 ## 배포 (AWS Lightsail)
 
-AWS Lightsail 인스턴스에서 docker-compose v1로 배포합니다 (인스턴스 사양과 리전: TODO(owner)).
+프로덕션은 AWS Lightsail 인스턴스에서 docker-compose v1로 돌아갑니다. Compose는 `web`과 `redis`를 띄웁니다. `web`은 uvicorn으로 서빙하는 FastAPI이며, React 앱은 이미지 안에 빌드되어 있습니다. 인스턴스 사양과 리전: TODO(owner).
+
+공개 사이트: <https://ai-job-matching.com>
+
+Cloudflare가 도메인을 프록시합니다 (`https://ai-job-matching.com`의 프록시된 A 레코드). Always Use HTTPS로 HTTP를 HTTPS로 리다이렉트합니다. 방문자는 HTTPS를 사용합니다. TLS는 Cloudflare에서 종료됩니다. 오리진은 호스트 80번 포트의 HTTP입니다.
+
+호스트는 `80:8000`을 열어 Cloudflare가 오리진에 접속하게 하고, `8000:8000`을 열어 인스턴스에서 직접 확인할 수 있게 합니다. 이력서와 같은 개인 데이터가 서버로 전송되므로, 계정이 아직 없어도 공개 사이트에는 HTTPS가 필요합니다. 나중에 로그인 기능을 추가할 때 자격 증명과 세션을 보호하기 위해서이기도 합니다.
 
 ```bash
 cd ~/Portfolio-Job-matching-Web
@@ -192,14 +198,23 @@ docker-compose logs -f web             # "Application startup complete" 확인
 
 `up -d --build` 전에 반드시 `down`을 먼저 실행하세요. 그렇지 않으면 구버전 `docker-compose`에서 `KeyError: 'ContainerConfig'`가 날 수 있습니다. 계속되면 남은 컨테이너를 지웁니다: `docker rm -f $(docker ps -aq --filter name=web)`.
 
-확인:
+인스턴스에서 확인 (오리진 HTTP):
 
 ```bash
 curl -s localhost:8000/stats           # {"total_jobs": N}
 curl -sI localhost:8000/ | head -1     # 200
+curl -sI localhost:80/ | head -1       # 200, Cloudflare가 접속하는 포트
 ```
 
-롤백: `git log --oneline -n 10`으로 이전 정상 커밋을 찾아 체크아웃한 뒤 `down`, `up -d --build`를 다시 실행합니다. `/legacy/`는 이전 UI와 비교할 수 있도록 계속 접근 가능합니다. 문서화된 구성은 8000번 포트의 HTTP입니다 (HTTPS는 아래 로드맵 항목일 뿐입니다).
+공개 사이트 확인:
+
+```bash
+curl -sI https://ai-job-matching.com/ | head -1    # 200
+curl -sI http://ai-job-matching.com/ | head -1     # https://ai-job-matching.com/ 으로 301
+curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
+```
+
+롤백: `git log --oneline -n 10`으로 이전 정상 커밋을 찾아 체크아웃한 뒤 `down`, `up -d --build`를 다시 실행합니다. `/legacy/`는 이전 UI와 비교할 수 있도록 계속 접근 가능합니다.
 
 ## 한계
 
@@ -219,11 +234,11 @@ curl -sI localhost:8000/ | head -1     # 200
 
 - 로그인 / 회원가입과 관심 공고 저장 (PR #7)
 - 구조화된 연봉 데이터와 추가 공고 소스 (PR #8)
-- Caddy 리버스 프록시를 통한 선택형 HTTPS (PR #5)
+- 인스턴스의 Caddy 리버스 프록시와 Let's Encrypt (PR #5). 공개 HTTPS는 배포 절의 Cloudflare 설정이며, 그 설정은 이 저장소 밖에 있습니다.
 - Docker Compose의 PostgreSQL 서비스 (PR #2), 로컬 실행 시 Redis 연결 수정 (PR #1)
 - `main` 병합 시 Lightsail 자동 배포 (PR #4)
 
-시작하지 않은 항목: 추천 품질 평가 데이터셋, 요청 속도 제한, async Redis 클라이언트.
+시작하지 않은 항목: 추천 품질 평가 데이터셋, 요청 속도 제한.
 
 ## 프로젝트 구조
 

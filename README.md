@@ -12,7 +12,7 @@ Upload a PDF resume and get the top 10 North American software job postings, ran
 
 Built by Joonyoung Ki, a CS undergraduate (international student in the US). Target roles: backend / general software engineering.
 
-- Live demo: TODO(owner): URL, or "not public"
+- Live demo: <https://ai-job-matching.com>
 - Repo: <https://github.com/junyoungKi/Portfolio-Job-matching-Web>
 
 ## Problem
@@ -88,7 +88,7 @@ Resumes and job postings share one table (`job_postings`); resumes are rows with
 
 ## Key design decisions and trade-offs
 
-- **Async end to end.** The DB layer uses SQLAlchemy's async engine with asyncpg, and OpenAI calls use `AsyncOpenAI`. PDF parsing is synchronous, so it runs in a thread executor to keep the event loop free. A semaphore (10) limits concurrent parse/embed work. Trade-off: the Redis client in `app/main.py` is the synchronous `redis` package, so cache calls still block the event loop briefly.
+- **Async end to end.** The DB layer uses SQLAlchemy's async engine with asyncpg, OpenAI calls use `AsyncOpenAI`, and the match cache uses one `redis.asyncio` client created during application startup. PDF parsing is synchronous, so it runs in a thread executor to keep the event loop free. A semaphore (10) limits concurrent parse/embed work. Cache commands use a 5 second socket timeout so a stalled Redis cannot hold a request open indefinitely.
 - **HNSW index.** Declared in `app/models.py` with `m=16`, `ef_construction=64` and cosine ops. HNSW is approximate and uses more memory and build time than a plain scan; it pays off only with many postings. Whether the planner uses it for the current `/match` query (it orders by a computed `1 - cosine_distance` score) is not confirmed: TODO(owner): run `EXPLAIN ANALYZE` and record the result.
 - **Retrieve, then rerank.** Vector search narrows to 100 candidates cheaply; the LLM then orders them using the resume's first 500 characters and each job's title, company and skills. If the LLM call fails, the vector-similarity order is used. Trade-off: extra latency and cost per request, and the rerank sees only a short resume excerpt.
 - **Redis cache plus stored analyses.** Match results are cached for 1 hour per resume and filter combination. KO/EN analyses are stored in `match_analyses` so each pair is generated only once. Trade-off: cached results can be up to an hour stale.
@@ -174,14 +174,20 @@ Note: `seed_jobs.py` imports a `SessionLocal` that no longer exists in `app/data
 ```bash
 # .env as above, but DATABASE_URL must point to a reachable PostgreSQL with pgvector
 docker compose up -d --build
-# open http://localhost:8000
+# http://localhost/ and http://localhost:8000 both reach the app
 ```
 
-`docker-compose.yml` on `main` starts only `web` and `redis`. It does not start PostgreSQL; you supply the database through `DATABASE_URL`. The Dockerfile is multi-stage (Node 22 builds the dashboard, Python 3.11 runs the API with Chromium for the crawler).
+`docker-compose.yml` starts `web` and `redis`. It does not start PostgreSQL; you supply the database through `DATABASE_URL`. The `web` service publishes host port 80 and host port 8000, both mapped to container port 8000. The Dockerfile is multi-stage: Node 22 builds the React app into the image, and Python 3.11 runs FastAPI with uvicorn (Chromium is included for the crawler).
 
 ## Deployment (AWS Lightsail)
 
-The service is deployed on an AWS Lightsail instance with docker-compose v1 (details of the instance size and region: TODO(owner)).
+Production runs on an AWS Lightsail instance with docker-compose v1. Compose starts `web` and `redis`. `web` is FastAPI served by uvicorn, and the React app is built into the image. Instance size and region: TODO(owner).
+
+Public site: <https://ai-job-matching.com>
+
+Cloudflare proxies the domain (proxied A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates TLS. The origin is HTTP on host port 80.
+
+The host publishes `80:8000` so Cloudflare can reach the origin, and `8000:8000` so direct checks on the instance still work. Resumes and similar personal data are sent to the server, so the public site needs HTTPS even before accounts exist. HTTPS is also there so a later login feature can protect credentials and sessions.
 
 ```bash
 cd ~/Portfolio-Job-matching-Web
@@ -192,14 +198,23 @@ docker-compose logs -f web             # wait for "Application startup complete"
 
 Always run `down` before `up -d --build`; the old `docker-compose` can fail with `KeyError: 'ContainerConfig'` otherwise. If it persists, remove the leftover container: `docker rm -f $(docker ps -aq --filter name=web)`.
 
-Verify:
+Verify on the instance (origin HTTP):
 
 ```bash
 curl -s localhost:8000/stats           # {"total_jobs": N}
 curl -sI localhost:8000/ | head -1     # 200
+curl -sI localhost:80/ | head -1       # 200, the port Cloudflare uses
 ```
 
-Rollback: `git log --oneline -n 10`, check out the previous good commit, then `down` and `up -d --build` again. `/legacy/` stays available to compare against the old UI. The documented setup serves plain HTTP on port 8000 (HTTPS is only a roadmap item below).
+Verify the public site:
+
+```bash
+curl -sI https://ai-job-matching.com/ | head -1    # 200
+curl -sI http://ai-job-matching.com/ | head -1     # 301 to https://ai-job-matching.com/
+curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
+```
+
+Rollback: `git log --oneline -n 10`, check out the previous good commit, then `down` and `up -d --build` again. `/legacy/` stays available to compare against the old UI.
 
 ## Limitations
 
@@ -219,11 +234,11 @@ These exist only in open, unmerged pull requests and are not part of `main`:
 
 - Login / sign-up and a job wishlist (PR #7)
 - Structured salary data and extra job sources (PR #8)
-- Opt-in HTTPS through a Caddy reverse proxy (PR #5)
+- Caddy reverse proxy with Let's Encrypt on the instance (PR #5). Public HTTPS is the Cloudflare setup in Deployment; that configuration lives outside this repository.
 - PostgreSQL service in Docker Compose (PR #2) and a Redis connection fix for local runs (PR #1)
 - Auto-deploy to Lightsail on merge to `main` (PR #4)
 
-Not started: an evaluation set for recommendation quality, rate limiting, an async Redis client.
+Not started: an evaluation set for recommendation quality, rate limiting.
 
 ## Project layout
 

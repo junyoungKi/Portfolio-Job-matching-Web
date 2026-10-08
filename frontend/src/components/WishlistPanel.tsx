@@ -7,7 +7,6 @@
 
 import { AlertCircle, Banknote, Building2, Heart, MapPin, RotateCw, X } from 'lucide-react'
 import { useEffect, useId, useRef } from 'react'
-import type { KeyboardEvent } from 'react'
 import { authTranslations } from '../lib/authI18n'
 import { useAuth } from '../lib/authContext'
 import { parseSkills } from '../lib/skills'
@@ -30,30 +29,39 @@ export function WishlistPanel({ lang }: Props) {
     closeRef.current?.focus()
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+
+    // Window-level handler so Escape and Tab trapping still work after the
+    // focused element (e.g. a just-removed item's button) leaves the DOM.
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closePanel()
+        return
+      }
+      const panel = panelRef.current
+      if (e.key !== 'Tab' || !panel) return
+      const focusable = panel.querySelectorAll<HTMLElement>('button:not([disabled])')
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (!panel.contains(active)) {
+        e.preventDefault()
+        first.focus()
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
     return () => {
+      window.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = prevOverflow
       opener?.focus?.()
     }
-  }, [])
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      closePanel()
-      return
-    }
-    if (e.key !== 'Tab' || !panelRef.current) return
-    const focusable = panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
-  }
+  }, [closePanel])
 
   const loading = wishlistStatus === 'idle' || wishlistStatus === 'loading'
 
@@ -69,7 +77,6 @@ export function WishlistPanel({ lang }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={onKeyDown}
         className="animate-fade-up flex h-full w-full max-w-lg flex-col border-l border-line bg-canvas shadow-lg"
       >
         <div className="flex items-start justify-between gap-4 border-b border-line bg-surface px-5 py-4 sm:px-6">

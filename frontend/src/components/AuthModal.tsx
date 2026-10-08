@@ -8,7 +8,7 @@
 
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent } from 'react'
+import type { FormEvent } from 'react'
 import { ApiError } from '../lib/api'
 import { authTranslations } from '../lib/authI18n'
 import type { AuthTranslation } from '../lib/authI18n'
@@ -70,32 +70,37 @@ export function AuthModal({ lang, mode }: Props) {
     emailRef.current?.focus()
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeModal()
+        return
+      }
+      const dialog = dialogRef.current
+      if (e.key !== 'Tab' || !dialog) return
+      const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (!dialog.contains(active)) {
+        e.preventDefault()
+        first.focus()
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
     return () => {
+      window.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = prevOverflow
       opener?.focus?.()
     }
-  }, [])
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      closeModal()
-      return
-    }
-    if (e.key !== 'Tab' || !dialogRef.current) return
-    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), a[href]',
-    )
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
-  }
+  }, [closeModal])
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -130,7 +135,6 @@ export function AuthModal({ lang, mode }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={onKeyDown}
         className="animate-fade-up w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-lg sm:p-8"
       >
         <div className="flex items-start justify-between gap-4">

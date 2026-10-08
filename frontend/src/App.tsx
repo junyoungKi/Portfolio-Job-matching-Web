@@ -46,7 +46,6 @@ export default function App() {
 
   const [totalJobs, setTotalJobs] = useState<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [keyword, setKeyword] = useState('')
   const [location, setLocation] = useState('North America')
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [resumeId, setResumeId] = useState<number | null>(null)
@@ -152,13 +151,12 @@ export default function App() {
 
 /** Validate the form, upload the resume, then load its matches. */
   const handleSubmit = () => {
-    const trimmed = keyword.trim()
-    if (!file || !trimmed) {
+    if (!file) {
       setFormError(t.errFill)
       return
     }
     void run(async (signal) => {
-      const data = await processResume(file, trimmed, location, signal)
+      const data = await processResume(file, location, signal)
       setResumeId(data.id)
       await loadMatches(data.id, filters, signal)
     })
@@ -220,16 +218,11 @@ export default function App() {
             <UploadCard
               t={t}
               file={file}
-              keyword={keyword}
               location={location}
               loading={loading}
               hasResults={results.status === 'success'}
               onFile={handleFile}
               onInvalidFile={() => setFormError(t.errPdf)}
-              onKeyword={(v) => {
-                setKeyword(v)
-                setResumeId(null)
-              }}
               onLocation={(v) => {
                 setLocation(v)
                 setResumeId(null)
@@ -257,7 +250,7 @@ export default function App() {
             selectedSkills={appliedSkills}
             onToggle={toggleOpen}
             onRetry={resumeId !== null ? handleReapply : handleSubmit}
-            canRetry={resumeId !== null || (file !== null && keyword.trim() !== '')}
+            canRetry={resumeId !== null || file !== null}
           />
         </main>
       </div>

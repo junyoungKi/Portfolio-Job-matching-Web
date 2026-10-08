@@ -58,16 +58,15 @@ export function fetchStats(signal?: AbortSignal): Promise<StatsResponse> {
   return request<StatsResponse>('/stats', { signal })
 }
 
-/** Upload a PDF resume with the search keyword and location; resolves with the stored resume id. */
+/** Upload a PDF resume with the selected location; resolves with the stored resume id. */
 export function processResume(
   file: File,
-  keyword: string,
   location: string,
   signal?: AbortSignal,
 ): Promise<ProcessResumeResponse> {
   const form = new FormData()
   form.append('file', file)
-  const qs = new URLSearchParams({ keyword, location })
+  const qs = new URLSearchParams({ location })
   return request<ProcessResumeResponse>(`/process-resume?${qs}`, {
     method: 'POST',
     body: form,

@@ -29,7 +29,7 @@ TODO(owner): add a screenshot or GIF at `docs/images/demo.gif` (upload resume, f
 
 ## What it does (shipped on `main`)
 
-- Upload a PDF resume with a target role and location (a single city, or "North America" for all hub cities).
+- Upload a PDF resume with a location (a single city, or "North America" for all hub cities).
 - Text extraction with PyMuPDF, then a 1536-dimension embedding (`text-embedding-3-small`).
 - Cosine-similarity search over stored postings (top 100 candidates), optionally filtered by experience level, employment type and skills.
 - LLM re-ranking (`gpt-4o-mini`) of the candidates; the top 10 are returned.
@@ -42,7 +42,7 @@ TODO(owner): add a screenshot or GIF at `docs/images/demo.gif` (upload resume, f
 
 ```mermaid
 flowchart LR
-    U[Browser: React dashboard] -->|POST /process-resume<br/>PDF + keyword + location| API[FastAPI]
+    U[Browser: React dashboard] -->|POST /process-resume<br/>PDF + location| API[FastAPI]
     API -->|parse in worker thread| P[PyMuPDF]
     API -->|embed text| E[OpenAI embeddings]
     API -->|store resume as USER_UPLOAD row| DB[(PostgreSQL + pgvector)]
@@ -92,14 +92,14 @@ Resumes and job postings share one table (`job_postings`); resumes are rows with
 - **HNSW index.** Declared in `app/models.py` with `m=16`, `ef_construction=64` and cosine ops. HNSW is approximate and uses more memory and build time than a plain scan; it pays off only with many postings. Whether the planner uses it for the current `/match` query (it orders by a computed `1 - cosine_distance` score) is not confirmed: TODO(owner): run `EXPLAIN ANALYZE` and record the result.
 - **Retrieve, then rerank.** Vector search narrows to 100 candidates cheaply; the LLM then orders them using the resume's first 500 characters and each job's title, company and skills. If the LLM call fails, the vector-similarity order is used. Trade-off: extra latency and cost per request, and the rerank sees only a short resume excerpt.
 - **Redis cache plus stored analyses.** Match results are cached for 1 hour per resume and filter combination. KO/EN analyses are stored in `match_analyses` so each pair is generated only once. Trade-off: cached results can be up to an hour stale.
-- **Resume de-duplication.** An MD5 of resume text + keyword + location is stored in `search_keyword`; re-uploading the same combination returns the existing record without re-embedding.
+- **Resume de-duplication.** An MD5 of resume text + location is stored in `search_keyword`; re-uploading the same combination returns the existing record without re-embedding. Crawled postings still store the crawl keyword (for example "Software Engineer") in that column.
 - **Single table for resumes and postings.** Simple to compare; the cost is that every query on postings must exclude `USER_UPLOAD` rows.
 
 ## Performance
 
-The load test (`locustfile.py`) sends two request types: `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf`, `keyword=Software Engineer`, `location=North America`, with 1-3 s wait between tasks. It does **not** call `/match/{id}`.
+The load test (`locustfile.py`) sends two request types: `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, with 1-3 s wait between tasks. It does **not** call `/match/{id}`.
 
-Because every upload uses the same file, keyword and location, requests after the first should hit the content-hash de-duplication path and skip the embedding call. The numbers below therefore reflect parsing, DB access and the upload path, not repeated OpenAI calls.
+Because every upload uses the same file and location, requests after the first should hit the content-hash de-duplication path and skip the embedding call. The numbers below therefore reflect parsing, DB access and the upload path, not repeated OpenAI calls.
 
 <!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
 ![Locust report, async version](docs/images/locust-after-async.jpeg)
@@ -205,7 +205,7 @@ Rollback: `git log --oneline -n 10`, check out the previous good commit, then `d
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.
 - Uploaded resumes are never deleted; the 30-day cleanup applies to crawled postings only.
-- The crawler searches only for "Software Engineer" in 8 cities and reads one result page (25 cards) per city per run. The role keyword entered in the UI is used only for resume de-duplication, not for search.
+- The crawler searches only for "Software Engineer" in 8 cities and reads one result page (25 cards) per city per run. Matching uses the resume embedding, location, and the level, type, and skill filters.
 - De-duplication matches on exact title and company, so the same role in two cities counts as one posting.
 - Salary is not collected: every crawled posting is stored with the placeholder "Competitive Salary".
 - Scraping LinkedIn can be blocked or break when its HTML changes, and may conflict with its terms of use.

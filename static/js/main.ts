@@ -13,7 +13,7 @@ export {};
 /** UI text keys that every language dictionary must provide. */
 interface Translation {
     title: string; subtitle: string; statsLabel: string;
-    keywordPlaceholder: string; resumeLabel: string;
+    resumeLabel: string;
     btnStart: string; analyzing: string; resultTitle: string;
     clickToggle: string; matchLabel: string; filterToggle: string;
     locAll: string; labelExp: string; labelType: string; labelSkills: string;
@@ -37,25 +37,25 @@ const translations: Record<string, Translation> = {
     // The Korean values below are intentionally kept in Korean: they are the product's Korean UI texts.
     ko: {
         title: "스마트 잡 AI", subtitle: "북미 커리어 매칭 시스템", statsLabel: "데이터베이스 공고 수",
-        keywordPlaceholder: "희망 직무 (예: C++ 개발자)", resumeLabel: "이력서 업로드 (PDF)", 
+        resumeLabel: "이력서 업로드 (PDF)", 
         btnStart: "AI 분석 시작", analyzing: ">> 분석 중입니다...", resultTitle: "AI 추천 매칭 결과",
         clickToggle: "상세 분석 내용 보기/닫기", matchLabel: "매칭률", filterToggle: "고급 필터 (경력, 형태, 기술 스택)",
         locAll: "북미 전체", labelExp: "경력 수준", labelType: "고용 형태", labelSkills: "주요 기술 (가중치 적용)",
         expEntry: "신입 (Entry)", expJunior: "주니어", expMid: "미들/시니어",
         typeFull: "정규직", typeIntern: "인턴십", typeContract: "계약직",
         btnFile: "파일 선택", noFile: "선택된 파일 없음",
-        matchError: "조건에 맞는 결과가 없습니다.", alertFill: "필수 정보를 입력해주세요!"
+        matchError: "조건에 맞는 결과가 없습니다.", alertFill: "PDF 이력서를 업로드해주세요!"
     },
     en: {
         title: "Smart Job AI", subtitle: "North America Career Matcher", statsLabel: "Jobs in Database",
-        keywordPlaceholder: "Target Role (e.g. C++ Developer)", resumeLabel: "Upload Your Resume (PDF)", 
+        resumeLabel: "Upload Your Resume (PDF)", 
         btnStart: "START AI ANALYSIS", analyzing: ">> ANALYZING...", resultTitle: "AI Recommended Matches",
         clickToggle: "Click to toggle detailed analysis", matchLabel: "Match", filterToggle: "Advanced Filters (Level, Type, Skills)",
         locAll: "All North America", labelExp: "Experience Level", labelType: "Employment Type", labelSkills: "Key Skills (Weighted)",
         expEntry: "Entry Level", expJunior: "Junior", expMid: "Mid/Senior",
         typeFull: "Full-time", typeIntern: "Internship", typeContract: "Contract",
         btnFile: "Choose File", noFile: "No file chosen",
-        matchError: "No matching results found.", alertFill: "Please fill in all required fields!"
+        matchError: "No matching results found.", alertFill: "Please upload a PDF resume!"
     }
 };
 
@@ -106,9 +106,6 @@ const changeUI = (): void => {
     updateText('opt-type-contract', t.typeContract); // Apply the Contract translation
     updateText('btn-file-custom', t.btnFile);
 
-    const keywordInput = document.getElementById('jobKeyword') as HTMLInputElement;
-    if (keywordInput) keywordInput.placeholder = t.keywordPlaceholder;
-
     const fileInput = document.getElementById('resumeFile') as HTMLInputElement;
     const nameDisplay = document.getElementById('file-name-display');
     if (nameDisplay && (!fileInput.files || !fileInput.files.length)) {
@@ -132,21 +129,20 @@ const handleFileSelect = (): void => {
 };
 
 /**
- * Upload the selected resume with the entered role and location to /process-resume,
- * then load the matches for the stored resume. Alerts when required input is missing.
+ * Upload the selected resume and location to /process-resume,
+ * then load the matches for the stored resume. Alerts when the PDF is missing.
  */
 const processAll = async (): Promise<void> => {
     const fileInput = document.getElementById('resumeFile') as HTMLInputElement;
-    const keywordInput = document.getElementById('jobKeyword') as HTMLInputElement;
     const locationSelect = document.getElementById('locationInput') as HTMLSelectElement;
     const lang = (document.getElementById('langSelect') as HTMLSelectElement).value;
     const file = fileInput.files ? fileInput.files[0] : null;
-    if (!file || !keywordInput.value) return alert(translations[lang].alertFill);
+    if (!file) return alert(translations[lang].alertFill);
     const formData = new FormData();
     formData.append('file', file);
     document.getElementById('status')?.classList.remove('hidden');
     try {
-        const res = await fetch(`/process-resume?keyword=${encodeURIComponent(keywordInput.value)}&location=${encodeURIComponent(locationSelect.value)}`, { method: 'POST', body: formData });
+        const res = await fetch(`/process-resume?location=${encodeURIComponent(locationSelect.value)}`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.status === "success") { openIndices.clear(); await fetchMatches(data.id); }
     } finally { document.getElementById('status')?.classList.add('hidden'); updateStats(); }

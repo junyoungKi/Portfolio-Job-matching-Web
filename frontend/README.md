@@ -45,7 +45,7 @@ When the build is hosted on a different origin than the API, the backend must al
 ## API used
 
 - `GET /stats` -> `{ total_jobs }`
-- `POST /process-resume?keyword=&location=` (multipart `file`) -> `{ status, id, ... }`
+- `POST /process-resume?location=` (multipart `file`) -> `{ status, id, ... }`
 - `GET /match/{id}?levels=&types=&skills=` -> `JobMatch[]` (types in `src/types.ts`)
 
 ## Layout

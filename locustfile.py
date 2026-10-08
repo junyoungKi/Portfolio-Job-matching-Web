@@ -38,7 +38,6 @@ class SmartJobUser(HttpUser):
             self.client.post(
                 "/process-resume",
                 params={
-                    "keyword": "Software Engineer", 
                     "location": "North America"
                 },
                 files={"file": ("test_resume.pdf", f, "application/pdf")}

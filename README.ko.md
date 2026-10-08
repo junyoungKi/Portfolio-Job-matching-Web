@@ -29,7 +29,7 @@ TODO(owner): `docs/images/demo.gif`에 스크린샷 또는 GIF를 추가하세�
 
 ## 제공 기능 (`main` 기준)
 
-- PDF 이력서, 희망 직무, 지역(단일 도시 또는 모든 거점 도시를 뜻하는 "North America")을 입력합니다.
+- PDF 이력서와 지역(단일 도시 또는 모든 거점 도시를 뜻하는 "North America")을 입력합니다.
 - PyMuPDF로 텍스트를 추출하고 1536차원 임베딩(`text-embedding-3-small`)을 만듭니다.
 - 저장된 공고에 대해 코사인 유사도로 상위 100개 후보를 검색하며, 경력 수준, 고용 형태, 기술 스택으로 필터링할 수 있습니다.
 - 후보를 LLM(`gpt-4o-mini`)으로 재정렬하고 상위 10개를 반환합니다.
@@ -42,7 +42,7 @@ TODO(owner): `docs/images/demo.gif`에 스크린샷 또는 GIF를 추가하세�
 
 ```mermaid
 flowchart LR
-    U[브라우저: React 대시보드] -->|POST /process-resume<br/>PDF + keyword + location| API[FastAPI]
+    U[브라우저: React 대시보드] -->|POST /process-resume<br/>PDF + location| API[FastAPI]
     API -->|워커 스레드에서 파싱| P[PyMuPDF]
     API -->|텍스트 임베딩| E[OpenAI embeddings]
     API -->|이력서를 USER_UPLOAD 행으로 저장| DB[(PostgreSQL + pgvector)]
@@ -92,14 +92,14 @@ flowchart LR
 - **HNSW 인덱스.** `app/models.py`에 `m=16`, `ef_construction=64`, 코사인 연산자로 선언했습니다. HNSW는 근사 검색이고 단순 스캔보다 메모리와 빌드 시간이 더 들기 때문에, 공고가 많을 때 효과가 있습니다. 현재 `/match` 쿼리가 계산된 `1 - cosine_distance` 점수로 정렬하기 때문에 플래너가 이 인덱스를 실제로 쓰는지는 확인하지 않았습니다: TODO(owner): `EXPLAIN ANALYZE`를 실행해 결과를 기록하세요.
 - **검색 후 재정렬.** 벡터 검색으로 후보를 100개로 줄이고, LLM이 이력서 앞 500자와 각 공고의 제목, 회사, 기술 스택을 보고 순서를 정합니다. LLM 호출이 실패하면 벡터 유사도 순서를 그대로 씁니다. 단점: 요청마다 지연과 비용이 늘고, 재정렬 단계는 이력서 일부만 봅니다.
 - **Redis 캐시와 분석 결과 저장.** 이력서와 필터 조합별로 결과를 1시간 캐시합니다. KO/EN 분석은 `match_analyses`에 저장해 쌍마다 한 번만 생성합니다. 단점: 캐시된 결과가 최대 1시간 지난 데이터일 수 있습니다.
-- **이력서 중복 방지.** 이력서 텍스트 + keyword + location의 MD5를 `search_keyword`에 저장하고, 같은 조합을 다시 올리면 재임베딩 없이 기존 레코드를 반환합니다.
+- **이력서 중복 방지.** 이력서 텍스트 + location의 MD5를 `search_keyword`에 저장하고, 같은 조합을 다시 올리면 재임베딩 없이 기존 레코드를 반환합니다. 수집된 공고는 같은 컬럼에 크롤 키워드(예: "Software Engineer")를 그대로 저장합니다.
 - **이력서와 공고를 한 테이블에 저장.** 비교는 단순해지지만, 공고를 조회하는 모든 쿼리에서 `USER_UPLOAD` 행을 제외해야 합니다.
 
 ## 성능
 
-부하 테스트(`locustfile.py`)는 `GET /stats`(가중치 2)와 `POST /process-resume`(가중치 1)를 보냅니다. 업로드는 `test_resume.pdf`, `keyword=Software Engineer`, `location=North America`를 쓰고 작업 사이에 1~3초 대기합니다. `/match/{id}`는 **호출하지 않습니다**.
+부하 테스트(`locustfile.py`)는 `GET /stats`(가중치 2)와 `POST /process-resume`(가중치 1)를 보냅니다. 업로드는 `test_resume.pdf`와 `location=North America`를 쓰고 작업 사이에 1~3초 대기합니다. `/match/{id}`는 **호출하지 않습니다**.
 
-모든 업로드가 같은 파일, 키워드, 지역을 쓰기 때문에 첫 요청 이후에는 콘텐츠 해시 중복 검사 경로로 들어가 임베딩 호출을 건너뛸 것으로 보입니다. 따라서 아래 수치는 파싱, DB 접근, 업로드 경로의 성능이며, OpenAI 호출을 반복한 결과가 아닙니다.
+모든 업로드가 같은 파일과 지역을 쓰기 때문에 첫 요청 이후에는 콘텐츠 해시 중복 검사 경로로 들어가 임베딩 호출을 건너뛸 것으로 보입니다. 따라서 아래 수치는 파싱, DB 접근, 업로드 경로의 성능이며, OpenAI 호출을 반복한 결과가 아닙니다.
 
 <!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
 ![Locust 리포트, async 버전](docs/images/locust-after-async.jpeg)
@@ -205,7 +205,7 @@ curl -sI localhost:8000/ | head -1     # 200
 
 - 인증이 없습니다. 이력서 전문이 저장되고, `/match/{id}`는 순차 정수 id를 쓰며, CORS는 모든 출처를 허용합니다. 민감한 이력서는 올리지 마세요.
 - 업로드한 이력서는 삭제되지 않습니다. 30일 정리는 수집된 공고에만 적용됩니다.
-- 크롤러는 8개 도시에서 "Software Engineer"만 검색하고, 실행당 도시별로 한 페이지(카드 25개)만 읽습니다. UI에 입력하는 희망 직무 키워드는 이력서 중복 판별에만 쓰이고 검색에는 쓰이지 않습니다.
+- 크롤러는 8개 도시에서 "Software Engineer"만 검색하고, 실행당 도시별로 한 페이지(카드 25개)만 읽습니다. 매칭은 이력서 임베딩, 지역, 경력/고용 형태/기술 필터를 사용합니다.
 - 중복 판별은 제목과 회사가 정확히 같은지만 보기 때문에, 서로 다른 도시의 같은 직무는 하나로 취급됩니다.
 - 연봉은 수집하지 않습니다. 수집된 모든 공고에는 "Competitive Salary"라는 고정 문구가 저장됩니다.
 - LinkedIn 스크래핑은 차단되거나 HTML이 바뀌면 깨질 수 있고, 이용 약관과 충돌할 수 있습니다.

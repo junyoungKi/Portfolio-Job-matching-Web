@@ -19,7 +19,7 @@ async def send_request(client, request_id):
     try:
         with open(FILE_PATH, "rb") as f:
             files = {"file": (FILE_PATH, f, "application/pdf")}
-            params = {"keyword": "software engineer", "location": "North America"}
+            params = {"location": "North America"}
             response = await client.post(URL, files=files, params=params, timeout=30.0)
             print(f"[Response {request_id}] Status: {response.status_code}")
             return response.status_code

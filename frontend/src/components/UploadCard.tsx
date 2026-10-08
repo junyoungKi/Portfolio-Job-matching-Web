@@ -3,10 +3,10 @@
  *
  * Upload form card.
  *
- * Combines the stepper, the resume dropzone, the target-role and location inputs and the submit button,
+ * Combines the stepper, the resume dropzone, the location input and the submit button,
  * and derives the stepper state from the form and request status.
  */
-import { ArrowRight, Briefcase, MapPin } from 'lucide-react'
+import { ArrowRight, MapPin } from 'lucide-react'
 import type { FormEvent } from 'react'
 import type { Translation } from '../lib/i18n'
 import { LOCATION_OPTIONS } from '../types'
@@ -18,18 +18,16 @@ import type { StepStatus } from './Stepper'
 interface Props {
   t: Translation
   file: File | null
-  keyword: string
   location: string
   loading: boolean
   hasResults: boolean
   onFile: (file: File | null) => void
   onInvalidFile: () => void
-  onKeyword: (v: string) => void
   onLocation: (v: string) => void
   onSubmit: () => void
 }
 
-/** Shared Tailwind classes for the text input and the select. */
+/** Shared Tailwind classes for the location select. */
 const fieldClass =
   'h-11 w-full rounded-lg border border-line-strong bg-surface pl-10 pr-3 text-sm text-fg placeholder:text-subtle transition-shadow focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand-soft disabled:opacity-60'
 
@@ -48,15 +46,14 @@ function StepHeading({ n, title, hint }: { n: number; title: string; hint?: stri
 
 /** Three-section form (upload, preferences, start analysis) that submits through `onSubmit`. */
 export function UploadCard(props: Props) {
-  const { t, file, keyword, location, loading, hasResults } = props
-  const hasKeyword = keyword.trim() !== ''
+  const { t, file, location, loading, hasResults } = props
 
   // Derive the stepper state from how far the user has progressed.
+  // Location always has a selected value, so a chosen PDF is enough to reach the last step.
   let statuses: [StepStatus, StepStatus, StepStatus]
   if (hasResults) statuses = ['done', 'done', 'done']
   else if (loading) statuses = ['done', 'done', 'current']
   else if (!file) statuses = ['current', 'upcoming', 'upcoming']
-  else if (!hasKeyword) statuses = ['done', 'current', 'upcoming']
   else statuses = ['done', 'done', 'current']
 
 /** Prevent the native form submission and delegate to the parent handler. */
@@ -83,44 +80,25 @@ export function UploadCard(props: Props) {
 
         <section>
           <StepHeading n={2} title={t.stepConditions} hint={t.stepConditionsHint} />
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div>
-              <label htmlFor="keyword" className="mb-1.5 block text-xs font-medium text-muted">
-                {t.keywordLabel}
-              </label>
-              <div className="relative">
-                <Briefcase className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" aria-hidden="true" />
-                <input
-                  id="keyword"
-                  type="text"
-                  value={keyword}
-                  disabled={loading}
-                  placeholder={t.keywordPlaceholder}
-                  onChange={(e) => props.onKeyword(e.target.value)}
-                  className={fieldClass}
-                />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="location" className="mb-1.5 block text-xs font-medium text-muted">
-                {t.locationLabel}
-              </label>
-              <div className="relative">
-                <MapPin className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" aria-hidden="true" />
-                <select
-                  id="location"
-                  value={location}
-                  disabled={loading}
-                  onChange={(e) => props.onLocation(e.target.value)}
-                  className={`${fieldClass} appearance-none`}
-                >
-                  {LOCATION_OPTIONS.map((loc) => (
-                    <option key={loc} value={loc}>
-                      {loc === 'North America' ? t.locAll : loc}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div>
+            <label htmlFor="location" className="mb-1.5 block text-xs font-medium text-muted">
+              {t.locationLabel}
+            </label>
+            <div className="relative">
+              <MapPin className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle" aria-hidden="true" />
+              <select
+                id="location"
+                value={location}
+                disabled={loading}
+                onChange={(e) => props.onLocation(e.target.value)}
+                className={`${fieldClass} appearance-none`}
+              >
+                {LOCATION_OPTIONS.map((loc) => (
+                  <option key={loc} value={loc}>
+                    {loc === 'North America' ? t.locAll : loc}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </section>

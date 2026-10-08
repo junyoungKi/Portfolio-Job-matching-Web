@@ -217,15 +217,15 @@ parse_semaphore = asyncio.Semaphore(10)
 @app.post("/process-resume")
 async def process_resume(
     file: UploadFile = File(...), 
-    keyword: str = Query(...), 
     location: str = Query(...), 
     db: AsyncSession = Depends(get_db)
 ):
     """Receive a PDF resume, parse and embed it, and store it as a ``USER_UPLOAD`` record.
 
     The upload is written to a uniquely named temporary file, which is always removed afterwards.
-    Identical resume/keyword/location combinations are de-duplicated through an MD5 content hash
-    so the same resume is not parsed and embedded twice.
+    Identical resume/location combinations are de-duplicated through an MD5 content hash
+    so the same resume is not parsed and embedded twice. The hash is stored in ``search_keyword``;
+    crawled postings keep using that column for the crawl keyword.
 
     Returns the resume record id that the client passes to ``/match/{resume_id}``.
     """
@@ -261,7 +261,7 @@ async def process_resume(
         async with parse_semaphore: 
             try:
                 text_content = await resume_parser.extract_text(file_path)
-                content_hash = hashlib.md5(f"{text_content}{keyword}{location}".encode()).hexdigest()
+                content_hash = hashlib.md5(f"{text_content}{location}".encode()).hexdigest()
                 
                 stmt = select(models.JobPosting).filter(
                     models.JobPosting.company == "USER_UPLOAD",

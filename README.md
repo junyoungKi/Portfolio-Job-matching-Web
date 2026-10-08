@@ -64,6 +64,10 @@ curl -sI localhost:8000/ | head -1           # 200, 브라우저에서 React 화
 # 브라우저: http://<서버IP>:8000/  (React),  /legacy/ (기존 UI),  /docs
 ```
 
+### HTTPS (도메인 + 자동 인증서, 옵트인)
+
+`docker-compose.https.yml` (Caddy 리버스 프록시)로 도메인 HTTPS 서비스를 켤 수 있습니다. 절차는 [docs/https.md](docs/https.md) 참고.
+
 ### 롤백
 
 ```bash

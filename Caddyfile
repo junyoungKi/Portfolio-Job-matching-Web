@@ -1,0 +1,15 @@
+# Author: Joonyoung Ki
+# Purpose: Caddy reverse proxy config for the opt-in HTTPS setup
+# (see docker-compose.https.yml and docs/https.md).
+#
+# Caddy obtains and renews a Let's Encrypt certificate automatically for the
+# domain given in the DOMAIN environment variable, and also redirects
+# HTTP (80) to HTTPS (443). It adds X-Forwarded-For / X-Forwarded-Proto /
+# X-Forwarded-Host headers on its own, so no extra header config is needed.
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# "web" is the FastAPI service name on the compose network.
+	reverse_proxy web:8000
+}

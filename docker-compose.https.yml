@@ -1,0 +1,52 @@
+# Author: Joonyoung Ki
+# Purpose: Opt-in compose override that puts a Caddy reverse proxy in front of
+# the FastAPI app and serves it over HTTPS (automatic Let's Encrypt certs).
+#
+# Usage (legacy docker-compose v1 is supported; no "version" key, same as
+# docker-compose.yml):
+#   docker-compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+# Requires DOMAIN=<your.domain> in .env. Without this file the app keeps
+# working as before on http://<server-ip>:8000.
+#
+# Note: compose merges "ports" lists, so the base file's "8000:8000" mapping
+# cannot be removed here. Keep port 8000 closed in the Lightsail firewall so
+# that only Caddy (80/443) is reachable from the internet.
+
+services:
+  web:
+    # Overrides the Dockerfile CMD only for this setup. Trust the X-Forwarded-*
+    # headers from the proxy so request.url.scheme is "https" (needed for
+    # Secure cookies and correct redirect URLs). "*" is acceptable because
+    # port 8000 must stay closed in the firewall (see note above).
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist certificates so they are not re-issued on every recreate
+      # (Let's Encrypt rate-limits duplicate certificates).
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:

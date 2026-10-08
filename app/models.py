@@ -5,6 +5,9 @@ from pgvector.sqlalchemy import Vector
 from .database import Base
 from sqlalchemy.sql import func
 
+# OpenAI text-embedding-3-small 출력 차원 (app/services/ai.py 의 get_embedding 과 동일해야 함)
+EMBEDDING_DIM = 1536
+
 class JobPosting(Base):
     __tablename__ = "job_postings"
     id = Column(Integer, primary_key=True, index=True)
@@ -14,7 +17,7 @@ class JobPosting(Base):
     location = Column(String, index=True)
     salary = Column(String)
     search_keyword = Column(String)
-    embedding = Column(Vector(1536)) 
+    embedding = Column(Vector(EMBEDDING_DIM))
     
     # 필터링 컬럼
     employment_type = Column(String, index=True)

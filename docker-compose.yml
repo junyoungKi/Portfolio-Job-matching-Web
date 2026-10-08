@@ -12,3 +12,25 @@ services:
     image: redis:latest
     ports:
       - "6379:6379"
+
+  # PostgreSQL 16 + pgvector (로컬 개발용). 사용 시 .env 에 아래처럼 지정:
+  #   DB_URL=postgresql+asyncpg://postgres:postgres@db:5432/job_match
+  # (compose 밖에서 직접 실행할 때는 호스트를 localhost 로 변경)
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: job_match
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d job_match"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

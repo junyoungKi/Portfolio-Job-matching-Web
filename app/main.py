@@ -243,25 +243,10 @@ async def match_jobs(
     else:
         search_locs = [resume.location]
         
-    score_query = (1 - models.JobPosting.embedding.cosine_distance(resume.embedding)).label("score")
-    
-    query = select(models.JobPosting, score_query).filter(
-        models.JobPosting.company != "USER_UPLOAD",
-        models.JobPosting.location.in_(search_locs)
+    candidates = await ai_service.find_similar_jobs(
+        db, resume,
+        locations=search_locs, levels=levels, types=types, skills=skills, limit=100
     )
-
-    if levels: 
-        query = query.filter(models.JobPosting.experience_level.in_(levels))
-    if types: 
-        query = query.filter(models.JobPosting.employment_type.in_(types))
-    if skills:
-        skill_filters = [models.JobPosting.skills.ilike(f"%{s}%") for s in skills]
-        query = query.filter(or_(*skill_filters))
-
-    query = query.order_by(desc("score")).limit(100)
-    
-    result = await db.execute(query)
-    candidates = result.all()
     
     if not candidates: 
         return []

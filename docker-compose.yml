@@ -5,6 +5,9 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # 컨테이너 내부에서는 compose 서비스명(redis)으로 접속 (.env 값보다 우선 적용)
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       - redis
 

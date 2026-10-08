@@ -21,23 +21,9 @@ from . import models
 from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
+from .cache import create_redis_client
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-
-try:
-    rd = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-    rd.ping()
-    print(f"✅ Redis 연결 성공 ({REDIS_HOST}:{REDIS_PORT})")
-except Exception as e:
-    print(f"⚠️ Redis 연결 실패, 재시도 주소 설정: {e}")
-    try:
-        rd = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
-        rd.ping()
-        print("✅ Redis 연결 성공 (fallback: redis)")
-    except Exception as ex:
-        print(f"❌ Redis 최종 연결 실패: {ex}")
-        rd = None
+rd = create_redis_client()
 
 async def scheduled_north_america_crawl():
     async with AsyncSessionLocal() as db:
@@ -304,8 +290,11 @@ async def match_jobs(
             "skills": job.skills 
         })
 
-    if rd: 
-        rd.setex(cache_key, 3600, json.dumps(results))
+    if rd:
+        try:
+            rd.setex(cache_key, 3600, json.dumps(results))
+        except Exception as e:
+            print(f"Redis 쓰기 오류: {e}")
     return results
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

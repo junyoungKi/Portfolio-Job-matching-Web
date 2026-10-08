@@ -22,6 +22,9 @@ from . import models
 from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
+from .services.migrations import run_salary_migration
+from .services.ats_ingest import scheduled_ats_crawl
+from .services.salary_store import salary_api_fields, salary_columns_from_info
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
@@ -65,6 +68,7 @@ async def scheduled_north_america_crawl():
                                     title=job['title'], company=job['company'], 
                                     description=job['description'], location=job['location'], 
                                     salary=job['salary'], search_keyword=kw, embedding=job_emb,
+                                    **salary_columns_from_info(job.get('salary_info')),
                                     employment_type=meta.get('employment_type', 'Full-time'),
                                     experience_level=meta.get('experience_level', 'Junior'),
                                     skills=", ".join(meta.get('skills', []))
@@ -103,9 +107,11 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(models.Base.metadata.create_all)
         print("✅ 데이터베이스 테이블 로드 완료")
+    await run_salary_migration(engine)
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
+    scheduler.add_job(scheduled_ats_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=2))
     scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
     scheduler.start()
     yield
@@ -302,7 +308,8 @@ async def match_jobs(
             "match_score": round(float(scores_dict[job.id]), 4),
             "summary_ko": analysis.summary_ko, "analysis_ko": analysis.analysis_ko,
             "summary_en": analysis.summary_en, "analysis_en": analysis.analysis_en,
-            "skills": job.skills 
+            "skills": job.skills,
+            **salary_api_fields(job),
         })
 
     if rd: 

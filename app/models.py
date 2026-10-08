@@ -1,5 +1,5 @@
 # app/models.py
-from sqlalchemy import Column, Integer, String, Text, DateTime, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Index, Float
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from .database import Base
@@ -13,6 +13,14 @@ class JobPosting(Base):
     description = Column(Text)
     location = Column(String, index=True)
     salary = Column(String)
+    # Structured salary (see app/services/salary_store.py); amounts are NULL when unknown.
+    salary_min = Column(Float)
+    salary_max = Column(Float)
+    salary_currency = Column(String(3))
+    salary_period = Column(String(16))
+    salary_annual_min = Column(Float)
+    salary_annual_max = Column(Float)
+    salary_source = Column(String(32))
     search_keyword = Column(String)
     embedding = Column(Vector(1536)) 
     

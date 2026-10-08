@@ -11,6 +11,16 @@ export interface JobMatch {
   summary_en: string
   analysis_en: string
   skills: string | null
+  /** Structured salary fields (optional: absent in older cached API responses). */
+  salary_min?: number | null
+  salary_max?: number | null
+  salary_currency?: string | null
+  salary_period?: string | null
+  salary_annual_min?: number | null
+  salary_annual_max?: number | null
+  salary_annual_min_usd_approx?: number | null
+  salary_annual_max_usd_approx?: number | null
+  salary_source?: string | null
 }
 
 export interface StatsResponse {

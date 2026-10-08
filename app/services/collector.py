@@ -2,6 +2,7 @@
 import asyncio
 import random
 from playwright.async_api import async_playwright
+from .salary_sources import extract_best_salary
 
 class JobCollector:
     def __init__(self):
@@ -82,12 +83,25 @@ class JobCollector:
                             except:
                                 description = f"{target['title']} 공고 상세 내용을 불러올 수 없습니다."
 
+                            # Structured salary: JSON-LD baseSalary, the on-page salary element, then description text.
+                            salary_text, salary_info = "Competitive Salary", None
+                            try:
+                                page_html = await detail_page.content()
+                                salary_el = await detail_page.query_selector(".compensation__salary, .salary.compensation__salary")
+                                page_salary = (await salary_el.inner_text()).strip() if salary_el else None
+                                salary_info = extract_best_salary(page_html, description, page_salary)
+                                if salary_info:
+                                    salary_text = salary_info.raw_text or page_salary or salary_text
+                            except Exception as salary_err:
+                                print(f"⚠️ Salary extraction failed: {salary_err}")
+
                             jobs.append({
                                 "title": target['title'],
                                 "company": target['company'],
                                 "description": description,
                                 "location": location,
-                                "salary": "Competitive Salary",
+                                "salary": salary_text,
+                                "salary_info": salary_info,
                                 "url": target['url']
                             })
                         except Exception as e:
@@ -106,6 +120,19 @@ class JobCollector:
 
             await browser.close()
         return jobs
-    
+
+    async def collect_ats_jobs(self, boards):
+        """Collect jobs (with structured salary) from public ATS board APIs.
+
+        ``boards`` is a list of ``(provider, board)`` tuples, for example
+        ``[("greenhouse", "airbnb"), ("lever", "weride")]``.
+        """
+        from .ats_client import fetch_ats_jobs
+
+        jobs = []
+        for provider, board in boards:
+            jobs.extend(await fetch_ats_jobs(provider, board))
+        return jobs
+
 # 🎯 이 줄이 반드시 있어야 main.py에서 불러올 수 있습니다.
 job_collector = JobCollector()

@@ -1,0 +1,71 @@
+{
+ "id": "7458d4e9-da2e-47bd-98cb-adfda43d42b2",
+ "title": "Engineering Manager - EU",
+ "location": "Remote - European Union",
+ "jobUrl": "https://jobs.ashbyhq.com/ashby/7458d4e9-da2e-47bd-98cb-adfda43d42b2",
+ "compensation": {
+  "compensationTierSummary": "\u20ac110K \u2013 \u20ac185K \u2022 Offers Equity \u2022 Offers Bonus",
+  "scrapeableCompensationSalarySummary": "\u20ac110K - \u20ac185K",
+  "compensationTiers": [
+   {
+    "id": "f1284fac-20e9-4ed0-9a10-776d526a636c",
+    "tierSummary": "\u20ac110K \u2013 \u20ac185K \u2022 Offers Equity \u2022 Offers Bonus",
+    "title": "EU",
+    "additionalInformation": null,
+    "components": [
+     {
+      "id": "04679796-e0e4-4d9b-a5c0-0cad3ff8ae95",
+      "summary": "Offers Bonus",
+      "compensationType": "Bonus",
+      "interval": "1 YEAR",
+      "currencyCode": "EUR",
+      "minValue": null,
+      "maxValue": null
+     },
+     {
+      "id": "da741ab6-ff38-4fc2-b7b7-c1ccd7260347",
+      "summary": "Offers Equity",
+      "compensationType": "EquityPercentage",
+      "interval": "NONE",
+      "currencyCode": null,
+      "minValue": null,
+      "maxValue": null
+     },
+     {
+      "id": "201b8495-aa7c-417d-923b-94fced49b246",
+      "summary": "\u20ac110K \u2013 \u20ac185K",
+      "compensationType": "Salary",
+      "interval": "1 YEAR",
+      "currencyCode": "EUR",
+      "minValue": 110000,
+      "maxValue": 185000
+     }
+    ]
+   }
+  ],
+  "summaryComponents": [
+   {
+    "compensationType": "Bonus",
+    "interval": "1 YEAR",
+    "currencyCode": "EUR",
+    "minValue": null,
+    "maxValue": null
+   },
+   {
+    "compensationType": "EquityPercentage",
+    "interval": "NONE",
+    "currencyCode": null,
+    "minValue": null,
+    "maxValue": null
+   },
+   {
+    "compensationType": "Salary",
+    "interval": "1 YEAR",
+    "currencyCode": "EUR",
+    "minValue": 110000,
+    "maxValue": 185000
+   }
+  ]
+ },
+ "descriptionPlain": ""
+}

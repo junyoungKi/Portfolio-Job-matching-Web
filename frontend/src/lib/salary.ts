@@ -24,6 +24,40 @@ export function parseSalary(raw: string | null | undefined): number | null {
   return max
 }
 
+/**
+ * Sortable annual salary for a job. Prefers the structured values from the API
+ * (USD-approximated annual max, then annual max) and only falls back to guessing
+ * from the free-text `salary` field when no structured value exists.
+ */
+export function jobSalaryValue(job: JobMatch): number | null {
+  const structured = job.salary_annual_max_usd_approx ?? job.salary_annual_max ?? job.salary_annual_min_usd_approx ?? job.salary_annual_min
+  if (typeof structured === 'number' && structured > 0) return structured
+  return parseSalary(job.salary)
+}
+
+const PERIOD_SUFFIX: Record<string, string> = {
+  hourly: '/hr',
+  daily: '/day',
+  weekly: '/wk',
+  biweekly: '/2wk',
+  monthly: '/mo',
+  yearly: '/yr',
+}
+
+/**
+ * Human-readable salary from structured fields (e.g. "USD 120,000 - 150,000 /yr"),
+ * or null when the job has no structured salary amounts.
+ */
+export function formatStructuredSalary(job: JobMatch): string | null {
+  const lo = job.salary_min ?? null
+  const hi = job.salary_max ?? null
+  if (lo === null && hi === null) return null
+  const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+  const amount = lo !== null && hi !== null && lo !== hi ? `${fmt(lo)} - ${fmt(hi)}` : lo === null ? `up to ${fmt(hi as number)}` : hi === null ? `from ${fmt(lo)}` : fmt(lo)
+  const suffix = job.salary_period ? (PERIOD_SUFFIX[job.salary_period] ?? '') : ''
+  return [job.salary_currency, amount, suffix].filter(Boolean).join(' ')
+}
+
 export function hasSalaryData(jobs: JobMatch[]): boolean {
-  return jobs.some((j) => parseSalary(j.salary) !== null)
+  return jobs.some((j) => jobSalaryValue(j) !== null)
 }

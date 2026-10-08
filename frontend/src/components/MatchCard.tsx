@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { useId } from 'react'
 import type { Translation } from '../lib/i18n'
 import { clampPct } from '../lib/score'
+import { formatStructuredSalary } from '../lib/salary'
 import { parseSkills } from '../lib/skills'
 import type { JobMatch, Lang } from '../types'
 import { ScoreGauge } from './ScoreGauge'
@@ -28,7 +29,8 @@ export function MatchCard({ t, lang, job, rank, index, open, selectedSkills, onT
   const hits = skills.filter((s) => wanted.has(s.toLowerCase()))
   const rest = skills.filter((s) => !wanted.has(s.toLowerCase()))
   const ordered = [...hits, ...rest]
-  const salary = job.salary && job.salary.trim() !== '' && job.salary !== 'None' ? job.salary : t.salaryUnknown
+  const rawSalary = job.salary && job.salary.trim() !== '' && job.salary !== 'None' ? job.salary : null
+  const salary = formatStructuredSalary(job) ?? rawSalary ?? t.salaryUnknown
 
   return (
     <article

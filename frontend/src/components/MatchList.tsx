@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Translation } from '../lib/i18n'
 import { jobKey } from '../lib/jobKey'
-import { hasSalaryData, parseSalary } from '../lib/salary'
+import { hasSalaryData, jobSalaryValue } from '../lib/salary'
 import type { JobMatch, Lang, ResultsState } from '../types'
 import { ErrorIllustration, IdleIllustration, NoResultIllustration } from './Illustrations'
 import { MatchCard } from './MatchCard'
@@ -72,8 +72,8 @@ function sortMatches(matches: JobMatch[], sort: SortKey): JobMatch[] {
   const copy = [...matches]
   if (sort === 'salary') {
     copy.sort((a, b) => {
-      const sa = parseSalary(a.salary)
-      const sb = parseSalary(b.salary)
+      const sa = jobSalaryValue(a)
+      const sb = jobSalaryValue(b)
       if (sa === null && sb === null) return b.match_score - a.match_score
       if (sa === null) return 1
       if (sb === null) return -1

@@ -4,6 +4,7 @@
   Project README (English): Portfolio-Job-matching-Web (Smart Job AI), an AI-powered resume-to-job matching service.
   Every statement here was checked against the code on main. Items marked TODO(owner) need to be filled in or verified.
 -->
+
 **English** | [한국어](README.ko.md)
 
 # Smart Job AI (Portfolio-Job-matching-Web)
@@ -19,12 +20,12 @@ Built by Joonyoung Ki, a CS undergraduate (international student in the US). Tar
 
 Job boards match on keywords, so a resume has to be compared with postings by hand. This project parses the resume, compares its meaning against collected postings with vector search, and explains why each result fits. It is a personal portfolio project, not a production service.
 
-TODO(owner): adjust this paragraph if your motivation differs.
-
 ## Demo
 
 <!-- DEMO SCREENSHOT/GIF: insert here -->
+
 <!-- ![Dashboard demo](docs/images/demo.gif) -->
+
 TODO(owner): add a screenshot or GIF at `docs/images/demo.gif` (upload resume, filters, results with analysis).
 
 ## What it does (shipped on `main`)
@@ -71,20 +72,20 @@ Resumes and job postings share one table (`job_postings`); resumes are rows with
 
 ## Tech stack and why
 
-| Component | Used for | Why |
-|---|---|---|
-| FastAPI + uvicorn | REST API, serves the built dashboard | Native async, simple request handling and typed query params |
-| SQLAlchemy (async) + asyncpg | Database access | Non-blocking DB calls inside async handlers |
-| PostgreSQL + pgvector | Postings, resumes, embeddings, analyses | One database for relational filters and vector search, no separate vector store |
-| HNSW index (`vector_cosine_ops`) | Similarity search | Approximate nearest-neighbour search that scales better than a full scan as postings grow |
-| Redis | Match-result cache | Repeat requests skip the vector search and LLM calls |
-| OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) | Embeddings, tagging, rerank, analysis | Hosted models; no model serving to maintain |
-| Playwright (Chromium) | Crawler | LinkedIn pages need a real browser to render |
-| APScheduler | Crawl and cleanup schedule | In-process scheduling, no extra service |
-| PyMuPDF | PDF text extraction | Fast, no external dependency |
-| React 19 + TypeScript + Vite + Tailwind | Dashboard (`frontend/`) | Typed UI with fast builds |
-| Docker (multi-stage) + Docker Compose | Packaging and deployment | Node builds the frontend; only `dist` ships in the Python image |
-| Locust | Load testing | Python-based, easy to script against the API |
+| Component                                        | Used for                                | Why                                                                                       |
+| ------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------- |
+| FastAPI + uvicorn                                | REST API, serves the built dashboard    | Native async, simple request handling and typed query params                              |
+| SQLAlchemy (async) + asyncpg                     | Database access                         | Non-blocking DB calls inside async handlers                                               |
+| PostgreSQL + pgvector                            | Postings, resumes, embeddings, analyses | One database for relational filters and vector search, no separate vector store           |
+| HNSW index (`vector_cosine_ops`)                 | Similarity search                       | Approximate nearest-neighbour search that scales better than a full scan as postings grow |
+| Redis                                            | Match-result cache                      | Repeat requests skip the vector search and LLM calls                                      |
+| OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) | Embeddings, tagging, rerank, analysis   | Hosted models; no model serving to maintain                                               |
+| Playwright (Chromium)                            | Crawler                                 | LinkedIn pages need a real browser to render                                              |
+| APScheduler                                      | Crawl and cleanup schedule              | In-process scheduling, no extra service                                                   |
+| PyMuPDF                                          | PDF text extraction                     | Fast, no external dependency                                                              |
+| React 19 + TypeScript + Vite + Tailwind          | Dashboard (`frontend/`)                 | Typed UI with fast builds                                                                 |
+| Docker (multi-stage) + Docker Compose            | Packaging and deployment                | Node builds the frontend; only `dist` ships in the Python image                           |
+| Locust                                           | Load testing                            | Python-based, easy to script against the API                                              |
 
 ## Key design decisions and trade-offs
 
@@ -102,18 +103,19 @@ The load test (`locustfile.py`) sends two request types: `GET /stats` (weight 2)
 Because every upload uses the same file and location, requests after the first should hit the content-hash de-duplication path and skip the embedding call. The numbers below therefore reflect parsing, DB access and the upload path, not repeated OpenAI calls.
 
 <!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
+
 ![Locust report, async version](docs/images/locust-after-async.jpeg)
 
 TODO(owner): confirm this image is the run you want to publish for the async version (it was previously `job_matching_web_locustReport.jpeg` in the repo root). If you prefer a different graph, save it as `docs/images/locust-after-async.png` and update the line above.
 
-| Metric (async version, 100 users) | Result |
-|---|---|
-| Requests per second | TODO(owner) |
-| p50 latency | TODO(owner) |
-| p95 latency | TODO(owner) |
-| Failure rate | TODO(owner) |
+| Metric (async version, 100 users)                             | Result      |
+| ------------------------------------------------------------- | ----------- |
+| Requests per second                                           | TODO(owner) |
+| p50 latency                                                   | TODO(owner) |
+| p95 latency                                                   | TODO(owner) |
+| Failure rate                                                  | TODO(owner) |
 | Test environment (machine, where the server ran, DB location) | TODO(owner) |
-| Locust version, run duration, spawn rate | TODO(owner) |
+| Locust version, run duration, spawn rate                      | TODO(owner) |
 
 <!-- The report image appears to show: 100 users, 3431 requests, 0 failures, ~44.9 aggregated RPS, p50 57 ms, p95 430 ms. Copy into the table only after confirming the run. -->
 
@@ -121,13 +123,13 @@ TODO(owner): confirm this image is the run you want to publish for the async ver
 
 Other numbers not measured yet:
 
-| Item | Result |
-|---|---|
-| Recommendation quality (Hit@10 / NDCG) | TODO(owner) |
-| `/match` latency (cold, cached) | TODO(owner) |
-| Vector query time with/without HNSW | TODO(owner) |
-| Stored postings count (`GET /stats`) | TODO(owner) |
-| Users | TODO(owner) (none claimed) |
+| Item                                   | Result                     |
+| -------------------------------------- | -------------------------- |
+| Recommendation quality (Hit@10 / NDCG) | TODO(owner)                |
+| `/match` latency (cold, cached)        | TODO(owner)                |
+| Vector query time with/without HNSW    | TODO(owner)                |
+| Stored postings count (`GET /stats`)   | TODO(owner)                |
+| Users                                  | TODO(owner) (none claimed) |
 
 ## Run locally
 
@@ -229,8 +231,6 @@ Rollback: `git log --oneline -n 10`, check out the previous good commit, then `d
 - Each uncached result triggers two LLM calls (KO and EN), made sequentially.
 
 ## Roadmap
-
-These exist only in open, unmerged pull requests and are not part of `main`:
 
 - Login / sign-up and a job wishlist (PR #7)
 - Structured salary data and extra job sources (PR #8)

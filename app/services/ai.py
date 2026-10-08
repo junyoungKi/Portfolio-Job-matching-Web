@@ -3,11 +3,39 @@ import os
 import json
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from sqlalchemy import select, or_
+from .. import models
 
 load_dotenv()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class AIService:
+    async def find_similar_jobs(self, db, resume, locations=None, levels=None, types=None, skills=None, limit: int = 100):
+        """pgvector 코사인 거리(<=>)로 이력서와 가장 유사한 공고를 반환합니다.
+
+        반환값: [(JobPosting, score), ...] — score = 1 - cosine_distance (높을수록 유사).
+        """
+        if resume is None or resume.embedding is None:
+            return []
+
+        distance = models.JobPosting.embedding.cosine_distance(resume.embedding)
+        score = (1 - distance).label("score")
+        query = select(models.JobPosting, score).filter(
+            models.JobPosting.company != "USER_UPLOAD",
+            models.JobPosting.embedding.is_not(None),
+        )
+        if locations is not None:
+            query = query.filter(models.JobPosting.location.in_(locations))
+        if levels:
+            query = query.filter(models.JobPosting.experience_level.in_(levels))
+        if types:
+            query = query.filter(models.JobPosting.employment_type.in_(types))
+        if skills:
+            query = query.filter(or_(*[models.JobPosting.skills.ilike(f"%{s}%") for s in skills]))
+
+        result = await db.execute(query.order_by(distance.asc()).limit(limit))
+        return result.all()
+
     async def get_embedding(self, text: str):
         response = await client.embeddings.create(input=text, model="text-embedding-3-small")
         return response.data[0].embedding

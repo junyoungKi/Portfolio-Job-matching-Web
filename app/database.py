@@ -1,35 +1,48 @@
 # app/database.py
 import os
 from dotenv import load_dotenv
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 
 load_dotenv()
 
-# 🎯 기존 'postgresql://' 에서 'postgresql+asyncpg://' 로 드라이버를 변경합니다.
-# (주의: 아래 user, password, dbname은 실제 준영님의 로컬 DB 환경에 맞게 수정해주세요)
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+asyncpg://user:password@localhost:5432/job_match"
-)
-# 1. 비동기 엔진 생성
-# echo=False로 설정하면 터미널에 SQL 쿼리문이 출력되는 것을 막아 속도를 높일 수 있습니다.
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL, echo=False)
-masked_url = SQLALCHEMY_DATABASE_URL.split("@")[-1] if "@" in SQLALCHEMY_DATABASE_URL else SQLALCHEMY_DATABASE_URL
-print(f"🔗 [DB Connection Target]: {masked_url}")
+DEFAULT_DB_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/job_match"
 
-# 2. 비동기 세션 팩토리 생성
-# SessionLocal 대신 AsyncSession을 생성하는 팩토리를 만듭니다.
+
+def _normalize_db_url(url: str) -> str:
+    """postgresql:// 또는 postgres:// 형태로 주어져도 비동기 드라이버(asyncpg)로 변환합니다."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+# DB_URL 을 우선 사용하고, 기존 배포 호환을 위해 DATABASE_URL 도 계속 지원합니다.
+SQLALCHEMY_DATABASE_URL = _normalize_db_url(
+    os.getenv("DB_URL") or os.getenv("DATABASE_URL") or DEFAULT_DB_URL
+)
+
+# pool_pre_ping: RDS 등에서 유휴 커넥션이 끊겨도 자동 복구
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=int(os.getenv("DB_POOL_SIZE", 5)),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", 10)),
+    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", 1800)),
+)
+print(f"🔗 [DB Connection Target]: {make_url(SQLALCHEMY_DATABASE_URL).render_as_string(hide_password=True).split('@')[-1]}")
+
 AsyncSessionLocal = async_sessionmaker(
     bind=engine, 
     class_=AsyncSession, 
     expire_on_commit=False
 )
 
-# 3. 모델의 기본이 되는 Base 클래스
 Base = declarative_base()
 
-# 4. 의존성 주입을 위한 비동기 DB 세션 제너레이터
 async def get_db():
     """
     FastAPI 엔드포인트에서 호출할 때마다 독립적인 비동기 DB 세션을 열고 닫습니다.

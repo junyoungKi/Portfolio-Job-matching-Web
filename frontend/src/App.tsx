@@ -1,9 +1,14 @@
+import { AlertCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { FilterPanel } from './components/FilterPanel'
 import { Header } from './components/Header'
+import { Hero } from './components/Hero'
 import { MatchList } from './components/MatchList'
-import { UploadForm } from './components/UploadForm'
+import { StatCards } from './components/StatCards'
+import { UploadCard } from './components/UploadCard'
 import { ApiError, fetchMatches, fetchStats, processResume } from './lib/api'
 import { translations } from './lib/i18n'
+import { useTheme } from './lib/theme'
 import type { Translation } from './lib/i18n'
 import { DEFAULT_FILTERS } from './types'
 import type { Filters, Lang, ResultsState } from './types'
@@ -25,6 +30,7 @@ function describeError(e: unknown, t: Translation): string {
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang)
   const t = translations[lang]
+  const theme = useTheme()
 
   const [totalJobs, setTotalJobs] = useState<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -37,6 +43,34 @@ export default function App() {
   const [results, setResults] = useState<ResultsState>({ status: 'idle' })
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set())
   const abortRef = useRef<AbortController | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const filterTriggerRef = useRef<HTMLButtonElement>(null)
+  const filterCloseRef = useRef<HTMLButtonElement>(null)
+
+  const activeFilterCount = filters.levels.length + filters.types.length + filters.skills.length
+
+  const closeFilters = useCallback(() => {
+    setFiltersOpen((wasOpen) => {
+      if (wasOpen) filterTriggerRef.current?.focus()
+      return false
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!filtersOpen) return
+    filterCloseRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeFilters()
+    }
+    const isMobile = !window.matchMedia('(min-width: 1024px)').matches
+    const prevOverflow = document.body.style.overflow
+    if (isMobile) document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [filtersOpen, closeFilters])
 
   const loading = results.status === 'loading'
 
@@ -127,51 +161,82 @@ export default function App() {
     })
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
-      <Header t={t} lang={lang} onLangChange={setLang} totalJobs={totalJobs} />
+    <div className="flex min-h-screen flex-col">
+      <Header
+        t={t}
+        lang={lang}
+        onLangChange={setLang}
+        themePref={theme.pref}
+        onThemeChange={theme.setPref}
+        totalJobs={totalJobs}
+        activeFilterCount={activeFilterCount}
+        onOpenFilters={() => setFiltersOpen(true)}
+        filterTriggerRef={filterTriggerRef}
+      />
+      <Hero t={t} />
 
-      <main className="mt-10 space-y-12">
-        <div>
-          <UploadForm
-            t={t}
-            file={file}
-            keyword={keyword}
-            location={location}
-            filters={filters}
-            loading={loading}
-            hasResume={resumeId !== null}
-            onFile={handleFile}
-            onInvalidFile={() => setFormError(t.errPdf)}
-            onKeyword={(v) => {
-              setKeyword(v)
-              setResumeId(null)
-            }}
-            onLocation={(v) => {
-              setLocation(v)
-              setResumeId(null)
-            }}
-            onFilters={setFilters}
-            onSubmit={handleSubmit}
-            onReapply={handleReapply}
-          />
-          {formError && (
-            <p role="alert" className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-              {formError}
-            </p>
-          )}
-        </div>
-
-        <MatchList
+      <div className="mx-auto grid w-full max-w-7xl flex-1 items-start gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[18.5rem_minmax(0,1fr)] lg:gap-8 lg:px-8 lg:py-10">
+        <FilterPanel
           t={t}
-          lang={lang}
-          state={results}
-          openKeys={openKeys}
-          selectedSkills={appliedSkills}
-          onToggle={toggleOpen}
-          onRetry={resumeId !== null ? handleReapply : handleSubmit}
-          canRetry={resumeId !== null || (file !== null && keyword.trim() !== '')}
+          filters={filters}
+          disabled={loading}
+          canReapply={resumeId !== null}
+          activeCount={activeFilterCount}
+          mobileOpen={filtersOpen}
+          closeRef={filterCloseRef}
+          onChange={setFilters}
+          onReapply={handleReapply}
+          onClose={closeFilters}
         />
-      </main>
+
+        <main className="min-w-0 space-y-8">
+          <div>
+            <UploadCard
+              t={t}
+              file={file}
+              keyword={keyword}
+              location={location}
+              loading={loading}
+              hasResults={results.status === 'success'}
+              onFile={handleFile}
+              onInvalidFile={() => setFormError(t.errPdf)}
+              onKeyword={(v) => {
+                setKeyword(v)
+                setResumeId(null)
+              }}
+              onLocation={(v) => {
+                setLocation(v)
+                setResumeId(null)
+              }}
+              onSubmit={handleSubmit}
+            />
+            {formError && (
+              <p
+                role="alert"
+                className="mt-4 flex items-start gap-2 rounded-xl border border-bad/40 bg-bad-soft px-4 py-3 text-sm font-medium text-bad"
+              >
+                <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                {formError}
+              </p>
+            )}
+          </div>
+
+          <StatCards t={t} totalJobs={totalJobs} state={results} />
+
+          <MatchList
+            t={t}
+            lang={lang}
+            state={results}
+            openKeys={openKeys}
+            selectedSkills={appliedSkills}
+            onToggle={toggleOpen}
+            onRetry={resumeId !== null ? handleReapply : handleSubmit}
+            canRetry={resumeId !== null || (file !== null && keyword.trim() !== '')}
+          />
+        </main>
+      </div>
+
+      <footer className="border-t border-line py-6 text-center text-xs text-subtle">{t.footer}</footer>
     </div>
   )
 }

@@ -3,7 +3,7 @@
 Dashboard UI for the job-matching backend (FastAPI, `app/main.py`). It ports the behaviour of the
 existing `static/` UI (which is untouched and still served by FastAPI at `/`).
 
-Stack: React 19, TypeScript, Vite 8, Tailwind CSS v4 (`@tailwindcss/vite`).
+Stack: React 19, TypeScript, Vite 8, Tailwind CSS v4 (`@tailwindcss/vite`), lucide-react (icons), Pretendard (font).
 
 ## Run (development)
 
@@ -46,8 +46,21 @@ When the build is hosted on a different origin than the API, the backend must al
 
 ```
 src/
-  App.tsx              state + data flow
-  components/          Header, UploadForm, FileDropzone, FilterPanel, MatchList, MatchCard
-  lib/                 api.ts (fetch + error handling), i18n.ts (ko/en), skills.ts
+  App.tsx              state + data flow, page layout (header / hero / filter sidebar + results)
+  components/          Header, Hero, Stepper, UploadCard, FileDropzone, FilterPanel (sidebar / mobile drawer),
+                       StatCards, MatchList (sorting, empty/error/skeleton), MatchCard, ScoreGauge, Illustrations
+  lib/                 api.ts, i18n.ts (ko/en), theme.ts (system/light/dark), salary.ts, score.ts, skills.ts
+  index.css            design tokens (see below)
   types.ts             JobMatch, Filters, ...
 ```
+
+## Design system
+
+Defined in `src/index.css` as semantic CSS variables, exposed to Tailwind as `bg-surface`, `text-fg`, `border-line`, `bg-brand`, ...
+
+- **Colour**: neutral canvas/surface/surface-2, text `fg` / `muted` / `subtle`, brand (indigo `#3b5bdb`), semantic `ok` / `warn` / `bad` (+ `-soft` tints). All text/background pairs are >= 4.5:1 in both themes.
+- **Theme**: light / dark / system (follows `prefers-color-scheme`), choice saved in `localStorage` (`theme`). An inline script in `index.html` applies it before first paint (no flash).
+- **Type**: Pretendard Variable (Korean + Latin, dynamic subset). Scale 12 / 14 / 16 / 18 / 20 / 24 / 28 / 44.
+- **Shape**: controls 8-12px radius, cards 16px, pills full; shadows `--shadow-sm/md/lg`; 1px `--line` borders.
+- **Motion**: fade-up / hover lift / animated gauge; all disabled under `prefers-reduced-motion`.
+- **Sorting**: by match score (default) or salary. Salary is free text from the API, so it is parsed best-effort and the option is disabled when no job has a parsable salary.

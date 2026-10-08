@@ -1,6 +1,11 @@
+import { ArrowUpDown, RotateCw } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { Translation } from '../lib/i18n'
 import { jobKey } from '../lib/jobKey'
-import type { Lang, ResultsState } from '../types'
+import { hasSalaryData, parseSalary } from '../lib/salary'
+import type { JobMatch, Lang, ResultsState } from '../types'
+import { ErrorIllustration, IdleIllustration, NoResultIllustration } from './Illustrations'
 import { MatchCard } from './MatchCard'
 
 interface Props {
@@ -14,15 +19,25 @@ interface Props {
   canRetry: boolean
 }
 
-function Placeholder({ title, body, tone = 'neutral' }: { title: string; body: string; tone?: 'neutral' | 'error' }) {
+type SortKey = 'score' | 'salary'
+
+function EmptyState({
+  illustration,
+  title,
+  body,
+  action,
+}: {
+  illustration: ReactNode
+  title: string
+  body: string
+  action?: ReactNode
+}) {
   return (
-    <div
-      className={`rounded-3xl border border-dashed p-12 text-center ${
-        tone === 'error' ? 'border-rose-500/40 bg-rose-500/5' : 'border-slate-800 bg-slate-900/40'
-      }`}
-    >
-      <p className={`text-base font-bold ${tone === 'error' ? 'text-rose-300' : 'text-slate-300'}`}>{title}</p>
-      <p className="mt-2 text-sm text-slate-500">{body}</p>
+    <div className="animate-fade-up flex flex-col items-center rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+      <div className="w-48 sm:w-56">{illustration}</div>
+      <h3 className="mt-4 text-lg font-bold text-fg">{title}</h3>
+      {body && <p className="mt-1.5 max-w-md text-sm leading-relaxed text-muted">{body}</p>}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   )
 }
@@ -31,68 +46,141 @@ function Skeleton() {
   return (
     <div className="space-y-4" aria-hidden="true">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="animate-pulse rounded-3xl border border-slate-800 bg-slate-900/60 p-6">
-          <div className="mb-4 flex gap-2">
-            <div className="h-5 w-24 rounded bg-slate-800" />
-            <div className="h-5 w-32 rounded bg-slate-800" />
+        <div key={i} className="rounded-2xl border border-line bg-surface p-6 shadow-sm">
+          <div className="flex gap-5">
+            <div className="skeleton hidden size-12 rounded-xl sm:block" />
+            <div className="flex-1 space-y-3">
+              <div className="skeleton h-5 w-24 rounded-md" />
+              <div className="skeleton h-6 w-2/3 rounded-md" />
+              <div className="skeleton h-4 w-1/2 rounded-md" />
+              <div className="skeleton h-16 w-full rounded-lg" />
+              <div className="flex gap-2">
+                <div className="skeleton h-6 w-16 rounded-full" />
+                <div className="skeleton h-6 w-20 rounded-full" />
+                <div className="skeleton h-6 w-14 rounded-full" />
+              </div>
+            </div>
+            <div className="skeleton hidden size-[92px] rounded-full sm:block" />
           </div>
-          <div className="mb-3 h-6 w-2/3 rounded bg-slate-800" />
-          <div className="h-4 w-full rounded bg-slate-800" />
         </div>
       ))}
     </div>
   )
 }
 
+function sortMatches(matches: JobMatch[], sort: SortKey): JobMatch[] {
+  const copy = [...matches]
+  if (sort === 'salary') {
+    copy.sort((a, b) => {
+      const sa = parseSalary(a.salary)
+      const sb = parseSalary(b.salary)
+      if (sa === null && sb === null) return b.match_score - a.match_score
+      if (sa === null) return 1
+      if (sb === null) return -1
+      return sb - sa || b.match_score - a.match_score
+    })
+  } else {
+    copy.sort((a, b) => b.match_score - a.match_score)
+  }
+  return copy
+}
+
 export function MatchList({ t, lang, state, openKeys, selectedSkills, onToggle, onRetry, canRetry }: Props) {
+  const [sortPref, setSortPref] = useState<SortKey>('score')
+  const matches = state.status === 'success' ? state.matches : null
+  const salaryAvailable = useMemo(() => (matches ? hasSalaryData(matches) : false), [matches])
+  const sort: SortKey = sortPref === 'salary' && salaryAvailable ? 'salary' : 'score'
+  const sorted = useMemo(() => (matches ? sortMatches(matches, sort) : []), [matches, sort])
+
   return (
-    <section aria-live="polite" aria-busy={state.status === 'loading'}>
-      <div className="mb-6 flex items-center justify-between border-l-4 border-blue-500 pl-4">
-        <h2 className="text-sm font-extrabold uppercase tracking-widest text-blue-400">{t.resultTitle}</h2>
-        {state.status === 'success' && state.matches.length > 0 && (
-          <span className="text-xs font-semibold text-slate-500">{t.resultCount(state.matches.length)}</span>
+    <section aria-labelledby="results-heading" aria-busy={state.status === 'loading'}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <h2 id="results-heading" className="text-lg font-bold tracking-tight text-fg sm:text-xl">
+            {t.resultTitle}
+          </h2>
+          {matches && matches.length > 0 && (
+            <span className="tabular rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand-text">
+              {t.resultCount(matches.length)}
+            </span>
+          )}
+        </div>
+        {matches && matches.length > 1 && (
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <ArrowUpDown className="size-4 text-subtle" aria-hidden="true" />
+            <span>{t.sortLabel}</span>
+            <select
+              value={sort}
+              onChange={(e) => setSortPref(e.target.value as SortKey)}
+              className="h-9 rounded-lg border border-line-strong bg-surface px-2.5 text-sm font-medium text-fg focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand-soft"
+            >
+              <option value="score">{t.sortScore}</option>
+              <option value="salary" disabled={!salaryAvailable}>
+                {salaryAvailable ? t.sortSalary : t.sortSalaryDisabled}
+              </option>
+            </select>
+          </label>
         )}
       </div>
 
-      {state.status === 'idle' && <Placeholder title={t.emptyIdleTitle} body={t.emptyIdleBody} />}
-      {state.status === 'loading' && <Skeleton />}
-      {state.status === 'error' && (
-        <div role="alert">
-          <Placeholder title={state.message} body="" tone="error" />
-          {canRetry && (
-            <div className="mt-4 text-center">
-              <button
-                type="button"
-                onClick={onRetry}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-              >
-                {t.retry}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {state.status === 'success' &&
-        (state.matches.length === 0 ? (
-          <Placeholder title={t.emptyResultTitle} body={t.emptyResultBody} />
-        ) : (
-          <div className="space-y-4">
-            {state.matches.map((job, idx) => {
-              const key = jobKey(job, idx)
-              return (
-                <MatchCard
-                  key={key}
-                  t={t}
-                  lang={lang}
-                  job={job}
-                  open={openKeys.has(key)}
-                  selectedSkills={selectedSkills}
-                  onToggle={() => onToggle(key)}
-                />
-              )
-            })}
+      <div aria-live="polite">
+        {state.status === 'idle' && (
+          <EmptyState
+            illustration={<IdleIllustration className="h-auto w-full" />}
+            title={t.emptyIdleTitle}
+            body={t.emptyIdleBody}
+          />
+        )}
+        {state.status === 'loading' && <Skeleton />}
+        {state.status === 'error' && (
+          <div role="alert">
+            <EmptyState
+              illustration={<ErrorIllustration className="h-auto w-full" />}
+              title={t.errorTitle}
+              body={state.message}
+              action={
+                canRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-on transition-colors hover:bg-brand-hover"
+                  >
+                    <RotateCw className="size-4" aria-hidden="true" />
+                    {t.retry}
+                  </button>
+                )
+              }
+            />
           </div>
-        ))}
+        )}
+        {state.status === 'success' &&
+          (state.matches.length === 0 ? (
+            <EmptyState
+              illustration={<NoResultIllustration className="h-auto w-full" />}
+              title={t.emptyResultTitle}
+              body={t.emptyResultBody}
+            />
+          ) : (
+            <div className="space-y-4">
+              {sorted.map((job, idx) => {
+                const key = jobKey(job, state.matches.indexOf(job))
+                return (
+                  <MatchCard
+                    key={key}
+                    t={t}
+                    lang={lang}
+                    job={job}
+                    rank={idx + 1}
+                    index={idx}
+                    open={openKeys.has(key)}
+                    selectedSkills={selectedSkills}
+                    onToggle={() => onToggle(key)}
+                  />
+                )
+              })}
+            </div>
+          ))}
+      </div>
     </section>
   )
 }

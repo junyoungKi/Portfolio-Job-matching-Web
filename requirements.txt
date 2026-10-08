@@ -13,3 +13,5 @@ greenlet
 pgvector
 python-multipart
 locust
+argon2-cffi
+PyJWT

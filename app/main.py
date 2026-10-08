@@ -22,6 +22,7 @@ from . import models
 from .services.parser import resume_parser
 from .services.ai import ai_service
 from .services.collector import job_collector
+from .accounts import auth_router, wishlist_router
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
@@ -113,6 +114,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(auth_router)
+app.include_router(wishlist_router)
 
 @app.get("/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
@@ -222,7 +225,7 @@ async def match_jobs(
     skills: Optional[List[str]] = Query(None)
 ):
     filter_tag = f"{levels}_{types}_{skills}"
-    cache_key = f"match_results:{resume_id}:{hashlib.md5(filter_tag.encode()).hexdigest()}"
+    cache_key = f"match_results:v2:{resume_id}:{hashlib.md5(filter_tag.encode()).hexdigest()}"
     
     if rd:
         try:
@@ -297,6 +300,7 @@ async def match_jobs(
             await db.commit()
 
         results.append({
+            "id": job.id,
             "title": str(job.title), "company": str(job.company), 
             "location": str(job.location), "salary": str(job.salary), 
             "match_score": round(float(scores_dict[job.id]), 4),

@@ -1,5 +1,6 @@
 import { Database, LineChart, Monitor, Moon, SlidersHorizontal, Sun } from 'lucide-react'
 import type { RefObject } from 'react'
+import { AccountMenu } from './AccountMenu'
 import type { Translation } from '../lib/i18n'
 import type { ThemePref } from '../lib/theme'
 import type { Lang } from '../types'
@@ -108,6 +109,8 @@ export function Header({
             </button>
           ))}
         </div>
+
+        <AccountMenu lang={lang} />
 
         <button
           ref={filterTriggerRef}

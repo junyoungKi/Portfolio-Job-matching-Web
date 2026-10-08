@@ -1,5 +1,6 @@
 import { AlertCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AuthLayer } from './components/AuthLayer'
 import { FilterPanel } from './components/FilterPanel'
 import { Header } from './components/Header'
 import { Hero } from './components/Hero'
@@ -235,6 +236,8 @@ export default function App() {
           />
         </main>
       </div>
+
+      <AuthLayer lang={lang} />
 
       <footer className="border-t border-line py-6 text-center text-xs text-subtle">{t.footer}</footer>
     </div>

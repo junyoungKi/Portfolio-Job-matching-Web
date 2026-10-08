@@ -1,6 +1,7 @@
 export type Lang = 'ko' | 'en'
 
 export interface JobMatch {
+  id?: number
   title: string
   company: string
   location: string

@@ -6,6 +6,7 @@ import { clampPct } from '../lib/score'
 import { parseSkills } from '../lib/skills'
 import type { JobMatch, Lang } from '../types'
 import { ScoreGauge } from './ScoreGauge'
+import { WishlistButton } from './WishlistButton'
 
 interface Props {
   t: Translation
@@ -46,6 +47,9 @@ export function MatchCard({ t, lang, job, rank, index, open, selectedSkills, onT
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs font-semibold text-subtle">
               <span className="rounded-md bg-surface-2 px-1.5 py-0.5 tabular text-muted">{t.rank(rank)}</span>
+              <span className="ml-auto">
+                <WishlistButton jobId={job.id} lang={lang} />
+              </span>
             </div>
             <h3 className="mt-1.5 text-lg font-bold leading-snug tracking-tight text-fg sm:text-xl">{job.title}</h3>
             <ul className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted">

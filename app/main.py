@@ -36,21 +36,76 @@ from .services.collector import job_collector
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+# Bound every cache command so a stalled Redis cannot hang a request forever.
+# The client is async, so the wait yields the event loop instead of blocking other requests.
+REDIS_SOCKET_TIMEOUT = 5.0
+REDIS_SOCKET_CONNECT_TIMEOUT = 5.0
 
-# Redis is an optional cache: if it is unreachable, ``rd`` becomes None and caching is skipped.
-try:
-    rd = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-    rd.ping()
-    print(f"Redis connection established ({REDIS_HOST}:{REDIS_PORT})")
-except Exception as e:
-    print(f"Redis connection failed, retrying with the fallback address: {e}")
+# Shared async client, created once in the application lifespan and closed on shutdown.
+# Redis is an optional cache: if it is unreachable, ``rd`` stays None and caching is skipped.
+rd: Optional[redis.asyncio.Redis] = None
+
+
+def build_redis_client(host: str, port: int) -> redis.asyncio.Redis:
+    """Return one async Redis client for the match-result cache.
+
+    ``socket_timeout`` and ``socket_connect_timeout`` cap how long a command or the initial
+    handshake may wait. ``socket_keepalive`` enables TCP keepalives on the pooled connection.
+    """
+    return redis.asyncio.Redis(
+        host=host,
+        port=port,
+        db=0,
+        decode_responses=True,
+        socket_timeout=REDIS_SOCKET_TIMEOUT,
+        socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT,
+        socket_keepalive=True,
+    )
+
+
+async def _close_redis(client: Optional[redis.asyncio.Redis]) -> None:
+    """Close a Redis client and its pool. ``aclose`` is used when this redis-py exposes it."""
+    if client is None:
+        return
+    closer = getattr(client, "aclose", None)
+    if closer is None:
+        closer = client.close
     try:
-        rd = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
-        rd.ping()
-        print("Redis connection established (fallback: redis)")
-    except Exception as ex:
-        print(f"Redis connection failed permanently: {ex}")
-        rd = None
+        await closer()
+    except Exception as e:
+        print(f"Redis close error: {e}")
+
+
+async def _try_connect(host: str, port: int) -> redis.asyncio.Redis:
+    """Ping ``host``. Close the client before re-raising so a failed attempt does not leak a pool."""
+    client = build_redis_client(host, port)
+    try:
+        await client.ping()
+        return client
+    except Exception:
+        await _close_redis(client)
+        raise
+
+
+async def connect_redis() -> Optional[redis.asyncio.Redis]:
+    """Open the optional match-result cache.
+
+    Tries ``REDIS_HOST`` first, then the ``redis`` service name used by Docker Compose.
+    Returns ``None`` when both attempts fail so request handlers skip caching.
+    """
+    try:
+        client = await _try_connect(REDIS_HOST, REDIS_PORT)
+        print(f"Redis connection established ({REDIS_HOST}:{REDIS_PORT})")
+        return client
+    except Exception as e:
+        print(f"Redis connection failed, retrying with the fallback address: {e}")
+        try:
+            client = await _try_connect("redis", 6379)
+            print("Redis connection established (fallback: redis)")
+            return client
+        except Exception as ex:
+            print(f"Redis connection failed permanently: {ex}")
+            return None
 
 async def scheduled_north_america_crawl():
     """Crawl LinkedIn for every North American hub, tag new postings with AI metadata and store them.
@@ -117,23 +172,33 @@ async def cleanup_old_jobs():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle: prepare the database schema and run the background scheduler.
+    """Application lifecycle: connect Redis, prepare the database schema and run the scheduler.
 
-    On startup it enables the pgvector extension, creates missing tables and starts the
-    crawl (every 6 hours, first run shortly after startup) and cleanup (daily at midnight) jobs.
-    The scheduler is shut down when the application stops.
+    On startup it opens one async Redis client (the match-result cache), enables the pgvector
+    extension, creates missing tables and starts the crawl (every 6 hours, first run shortly
+    after startup) and cleanup (daily at midnight) jobs.
+    On shutdown it stops the scheduler and closes that Redis client.
     """
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.run_sync(models.Base.metadata.create_all)
-        print("Database tables are ready")
+    global rd
+    rd = await connect_redis()
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await conn.run_sync(models.Base.metadata.create_all)
+            print("Database tables are ready")
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
-    scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
-    scheduler.start()
-    yield
-    scheduler.shutdown()
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
+        scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
+        scheduler.start()
+        yield
+        scheduler.shutdown()
+    finally:
+        # Drop the shared reference before closing so a request in shutdown skips the cache
+        # instead of calling a client whose pool is going away.
+        client = rd
+        rd = None
+        await _close_redis(client)
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -267,9 +332,10 @@ async def match_jobs(
     filter_tag = f"{levels}_{types}_{skills}"
     cache_key = f"match_results:{resume_id}:{hashlib.md5(filter_tag.encode()).hexdigest()}"
     
-    if rd:
+    cache = rd
+    if cache:
         try:
-            cached = rd.get(cache_key)
+            cached = await cache.get(cache_key)
             if cached:
                 return json.loads(cached)
         except Exception as e:
@@ -351,8 +417,9 @@ async def match_jobs(
             "skills": job.skills 
         })
 
-    if rd: 
-        rd.setex(cache_key, 3600, json.dumps(results))
+    cache = rd
+    if cache:
+        await cache.setex(cache_key, 3600, json.dumps(results))
     return results
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

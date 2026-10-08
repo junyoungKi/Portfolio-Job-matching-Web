@@ -1,7 +1,7 @@
 # Smart Job AI - Frontend (React + Vite + Tailwind CSS)
 
 Dashboard UI for the job-matching backend (FastAPI, `app/main.py`). It ports the behaviour of the
-existing `static/` UI (which is untouched and still served by FastAPI at `/`).
+existing `static/` UI (untouched). In production FastAPI serves `frontend/dist` at `/` (multi-stage Dockerfile) and the old UI at `/legacy`; without `dist` it falls back to the old UI at `/`. See the root README for build/deploy.
 
 Stack: React 19, TypeScript, Vite 8, Tailwind CSS v4 (`@tailwindcss/vite`), lucide-react (icons), Pretendard (font).
 

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, desc, or_, text, func
@@ -308,4 +309,19 @@ async def match_jobs(
         rd.setex(cache_key, 3600, json.dumps(results))
     return results
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LEGACY_DIR = os.path.join(_BASE_DIR, "static")
+_FRONTEND_DIST = os.path.join(_BASE_DIR, "frontend", "dist")
+
+# 정적 마운트는 반드시 모든 API 라우트 등록 이후(파일 맨 끝)에 위치해야 API가 가려지지 않는다.
+# 기존 static UI는 /legacy 로 항상 접근 가능(비교/롤백용).
+@app.get("/legacy", include_in_schema=False)
+async def legacy_redirect():
+    return RedirectResponse(url="/legacy/")
+
+app.mount("/legacy", StaticFiles(directory=_LEGACY_DIR, html=True), name="legacy")
+
+if os.path.isfile(os.path.join(_FRONTEND_DIST, "index.html")):
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+else:
+    app.mount("/", StaticFiles(directory=_LEGACY_DIR, html=True), name="static")

@@ -3,7 +3,6 @@
 # Reverse proxy in front of the FastAPI app. TLS uses the Cloudflare Origin
 # Certificate mounted from deploy/certs/ (not Let's Encrypt). Port 80 redirects
 # to HTTPS. Caddy adds X-Forwarded-For, X-Forwarded-Proto, and X-Forwarded-Host.
-
 {
 	# The origin certificate is supplied as files. Do not start an ACME client.
 	auto_https off

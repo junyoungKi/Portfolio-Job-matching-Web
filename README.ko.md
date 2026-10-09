@@ -229,6 +229,14 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### 배포
 
+`main`에 병합하면 GitHub Actions가 배포합니다. `.github/workflows/deploy.yml`이 GitHub 호스트 러너에서 Lightsail 인스턴스로 SSH 접속한 뒤 `deploy/lightsail.sh`를 실행합니다. 스크립트가 실패하면 작업도 실패합니다. 일회성 설정은 저장소 Actions 시크릿 세 개와, 그 키 쌍의 공개 키를 서버 사용자의 `~/.ssh/authorized_keys`에 넣는 것입니다.
+
+- `LIGHTSAIL_HOST`: 인스턴스의 공인 IP 또는 DNS
+- `LIGHTSAIL_USER`: `ubuntu`
+- `LIGHTSAIL_SSH_KEY`: 개인 키 PEM
+
+개인 키, 공인 IP, 시크릿 값은 커밋하지 마세요.
+
 ```bash
 cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
@@ -287,7 +295,6 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 - 로그인 / 회원가입과 관심 공고 저장 (PR #7)
 - 구조화된 연봉 데이터와 추가 공고 소스 (PR #8)
 - Docker Compose의 PostgreSQL 서비스 (PR #2), 로컬 실행 시 Redis 연결 수정 (PR #1)
-- `main` 병합 시 Lightsail 자동 배포 (PR #4)
 
 시작하지 않은 항목: 추천 품질 평가 데이터셋, 요청 속도 제한.
 
@@ -299,6 +306,7 @@ frontend/       React + Vite 대시보드 (frontend/README.md 참고)
 static/         /legacy 에서 서빙되는 이전 UI
 Caddyfile       오리진 TLS 리버스 프록시 (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem, origin-key.pem (gitignore, README.txt 참고)
+deploy/lightsail.sh  GitHub Actions가 실행하는 Lightsail 배포 스크립트
 locustfile.py   부하 테스트
 docs/images/    README 이미지
 ```

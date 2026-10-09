@@ -1,0 +1,74 @@
+# Deploy to Lightsail when main is pushed.
+# Secrets (repository Actions secrets; never commit the values):
+#   LIGHTSAIL_HOST    public IP or DNS of the instance
+#   LIGHTSAIL_USER    ubuntu
+#   LIGHTSAIL_SSH_KEY private key PEM
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: lightsail-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Deploy over SSH
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+          LIGHTSAIL_SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${LIGHTSAIL_HOST}" ] || [ -z "${LIGHTSAIL_USER}" ] || [ -z "${LIGHTSAIL_SSH_KEY}" ]; then
+            echo "Missing GitHub Actions secret LIGHTSAIL_HOST, LIGHTSAIL_USER, or LIGHTSAIL_SSH_KEY" >&2
+            exit 1
+          fi
+          case "${LIGHTSAIL_HOST}" in
+            *[!A-Za-z0-9.:-]*)
+              echo "LIGHTSAIL_HOST must be a hostname or IP address" >&2
+              exit 1
+              ;;
+          esac
+          case "${LIGHTSAIL_USER}" in
+            *[!A-Za-z0-9._-]*)
+              echo "LIGHTSAIL_USER contains unsupported characters" >&2
+              exit 1
+              ;;
+          esac
+
+          key_file="${RUNNER_TEMP}/lightsail_deploy_key"
+          known_hosts="${RUNNER_TEMP}/lightsail_known_hosts"
+          umask 077
+          printf '%s\n' "${LIGHTSAIL_SSH_KEY}" | tr -d '\r' > "${key_file}"
+          chmod 600 "${key_file}"
+          if ! grep -q "PRIVATE KEY" "${key_file}"; then
+            echo "LIGHTSAIL_SSH_KEY does not look like a PEM private key" >&2
+            exit 1
+          fi
+
+          # The runner's OpenSSH client. The remote bash exit code fails this step.
+          ssh -i "${key_file}" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile="${known_hosts}" \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}" \
+            bash -s < deploy/lightsail.sh

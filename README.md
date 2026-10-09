@@ -231,6 +231,14 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### Deploy
 
+Merging to `main` deploys via GitHub Actions. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail instance, and runs `deploy/lightsail.sh`. The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
+
+- `LIGHTSAIL_HOST`: public IP or DNS of the instance
+- `LIGHTSAIL_USER`: `ubuntu`
+- `LIGHTSAIL_SSH_KEY`: private key PEM
+
+Do not commit the private key, the public IP, or any secret value.
+
 ```bash
 cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
@@ -287,7 +295,6 @@ Rollback: `git log --oneline -n 10`. While this compose file is still checked ou
 - Login / sign-up and a job wishlist (PR #7)
 - Structured salary data and extra job sources (PR #8)
 - PostgreSQL service in Docker Compose (PR #2) and a Redis connection fix for local runs (PR #1)
-- Auto-deploy to Lightsail on merge to `main` (PR #4)
 
 Not started: an evaluation set for recommendation quality, rate limiting.
 
@@ -299,6 +306,7 @@ frontend/       React + Vite dashboard (see frontend/README.md)
 static/         Legacy UI served at /legacy
 Caddyfile       Origin TLS reverse proxy (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem and origin-key.pem (gitignored; see README.txt)
+deploy/lightsail.sh  Lightsail deploy script run by GitHub Actions
 locustfile.py   Load test
 docs/images/    README images
 ```

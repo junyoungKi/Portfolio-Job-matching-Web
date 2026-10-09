@@ -21,6 +21,8 @@ export default defineConfig({
       '/stats': backend,
       '/process-resume': backend,
       '/match': backend,
+      '/auth': backend,
+      '/wishlist': backend,
     },
   },
 })

@@ -1,0 +1,138 @@
+name: Deploy to Lightsail
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 배포가 겹치지 않도록 순서대로 하나씩 실행한다.
+concurrency:
+  group: lightsail-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check deploy secrets
+        id: check
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+          LIGHTSAIL_SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$LIGHTSAIL_HOST" ] || missing="$missing LIGHTSAIL_HOST"
+          [ -n "$LIGHTSAIL_USER" ] || missing="$missing LIGHTSAIL_USER"
+          [ -n "$LIGHTSAIL_SSH_KEY" ] || missing="$missing LIGHTSAIL_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::Secrets not set:${missing}. See docs/deploy.md. Skipping deploy."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up SSH
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$LIGHTSAIL_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 15 -H "$LIGHTSAIL_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::Cannot reach ${LIGHTSAIL_HOST} on SSH port 22. Check LIGHTSAIL_HOST and the Lightsail firewall (port 22)."
+            exit 1
+          fi
+
+      - name: Deploy over SSH
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o BatchMode=yes -o ServerAliveInterval=30 \
+            "${LIGHTSAIL_USER}@${LIGHTSAIL_HOST}" 'bash -s' <<'REMOTE'
+          set -uo pipefail
+
+          APP_DIR="$HOME/Portfolio-Job-matching-Web"
+          HEALTH_URLS="http://localhost:8000/docs http://localhost:8000/stats"
+          RETRIES=30
+          SLEEP=5
+
+          cd "$APP_DIR" || { echo "ERROR: $APP_DIR not found"; exit 1; }
+
+          healthy() {
+            for url in $HEALTH_URLS; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url" || true)
+              echo "  health check $url -> HTTP ${code:-000}"
+              [ "$code" = "200" ] && return 0
+            done
+            return 1
+          }
+
+          wait_healthy() {
+            for i in $(seq 1 "$RETRIES"); do
+              echo "[health] attempt $i/$RETRIES"
+              healthy && return 0
+              sleep "$SLEEP"
+            done
+            return 1
+          }
+
+          # docker-compose v1 의 'ContainerConfig' 오류를 피하려고 항상 down 후 up 한다.
+          redeploy() {
+            docker-compose down
+            docker-compose up -d --build
+          }
+
+          PREV_SHA=$(git rev-parse HEAD)
+          echo "[deploy] previous commit: $PREV_SHA"
+
+          echo "[deploy] git pull"
+          git fetch origin main || { echo "ERROR: git fetch failed"; exit 1; }
+          if ! git pull --ff-only origin main; then
+            echo "ERROR: git pull failed (server has local changes or diverged history)."
+            echo "       Fix on the server: cd $APP_DIR && git status"
+            exit 1
+          fi
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "[deploy] new commit: $NEW_SHA"
+
+          echo "[deploy] docker-compose down && up -d --build"
+          if redeploy && wait_healthy; then
+            echo "[deploy] SUCCESS: $NEW_SHA is healthy"
+            docker-compose ps
+            exit 0
+          fi
+
+          echo "ERROR: deploy of $NEW_SHA failed or did not become healthy."
+          docker-compose ps || true
+          docker-compose logs --tail=80 web || true
+
+          if [ "$PREV_SHA" = "$NEW_SHA" ]; then
+            echo "ERROR: no previous commit to roll back to (code did not change)."
+            exit 1
+          fi
+
+          echo "[rollback] resetting to $PREV_SHA and rebuilding"
+          git reset --hard "$PREV_SHA"
+          if redeploy && wait_healthy; then
+            echo "[rollback] OK: server restored to $PREV_SHA. The failed commit is $NEW_SHA."
+          else
+            echo "[rollback] FAILED: server is still unhealthy. Manual rollback:"
+            echo "  ssh to server; cd $APP_DIR; git reset --hard $PREV_SHA; docker-compose down; docker-compose up -d --build"
+          fi
+          exit 1
+          REMOTE
+
+      - name: Clean up SSH key
+        if: always() && steps.check.outputs.enabled == 'true'
+        run: rm -f ~/.ssh/deploy_key

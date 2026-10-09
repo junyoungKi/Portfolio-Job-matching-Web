@@ -5,7 +5,8 @@ Main FastAPI application for the Smart Job AI job-matching service.
 
 Responsibilities:
     - Connects to Redis (match-result cache) and PostgreSQL/pgvector (job postings, resumes, analyses).
-    - Schedules periodic LinkedIn crawling with AI tagging, and daily cleanup of stale postings.
+    - Schedules periodic LinkedIn crawling with AI tagging, daily cleanup of stale crawled
+      postings, and frequent cleanup of uploaded resumes.
     - Exposes the REST API: ``/stats``, ``/process-resume`` and ``/match/{resume_id}``.
     - Serves the React dashboard (``frontend/dist``) at ``/`` and the legacy static UI at ``/legacy``.
 """
@@ -153,16 +154,53 @@ async def scheduled_north_america_crawl():
         except Exception as e: 
             print(f"[BATCH] Batch-level error: {e}")
 
+# Crawled postings stay on the 30-day clock. Uploaded resumes are personal data with no
+# login, so they are removed after one hour: long enough for the same session to re-run
+# /match with different filters, and short enough that abandoned uploads do not linger.
+CRAWLED_POSTING_RETENTION = timedelta(days=30)
+USER_RESUME_RETENTION = timedelta(hours=1)
+USER_RESUME_CLEANUP_MINUTES = 10
+
+
+def crawled_posting_delete_stmt(now: datetime):
+    """Delete crawled postings older than 30 days. ``USER_UPLOAD`` rows are excluded."""
+    cutoff = now - CRAWLED_POSTING_RETENTION
+    return delete(models.JobPosting).filter(
+        models.JobPosting.company != "USER_UPLOAD",
+        models.JobPosting.created_at < cutoff,
+    )
+
+
+def expired_user_resume_delete_stmts(now: datetime):
+    """Delete ``USER_UPLOAD`` rows older than one hour, and their ``MatchAnalysis`` rows.
+
+    Analyses are removed first, by ``resume_id``, including uploads that never called
+    ``/match`` (those simply have no analysis rows). Crawled postings are not selected.
+    """
+    cutoff = now - USER_RESUME_RETENTION
+    expired_ids = select(models.JobPosting.id).filter(
+        models.JobPosting.company == "USER_UPLOAD",
+        models.JobPosting.created_at < cutoff,
+    )
+    analyses = delete(models.MatchAnalysis).filter(
+        models.MatchAnalysis.resume_id.in_(expired_ids)
+    )
+    resumes = delete(models.JobPosting).filter(
+        models.JobPosting.company == "USER_UPLOAD",
+        models.JobPosting.created_at < cutoff,
+    )
+    return analyses, resumes
+
+
 async def cleanup_old_jobs():
-    """Delete crawled postings older than 30 days, keeping the stored user resumes (``USER_UPLOAD``)."""
+    """Delete crawled postings older than 30 days.
+
+    ``USER_UPLOAD`` resumes are not deleted here. ``cleanup_expired_resumes`` removes
+    them after one hour.
+    """
     async with AsyncSessionLocal() as db:
         try:
-            expiry_date = datetime.now() - timedelta(days=30)
-            stmt = delete(models.JobPosting).filter(
-                models.JobPosting.company != "USER_UPLOAD",
-                models.JobPosting.created_at < expiry_date
-            )
-            result = await db.execute(stmt)
+            result = await db.execute(crawled_posting_delete_stmt(datetime.now()))
             await db.commit()
             if result.rowcount > 0:
                 print(f"[CLEANUP] Deleted {result.rowcount} expired postings")
@@ -170,13 +208,35 @@ async def cleanup_old_jobs():
             await db.rollback()
             print(f"[CLEANUP] Error: {e}")
 
+
+async def cleanup_expired_resumes():
+    """Delete uploaded resumes older than one hour, and the analyses stored for them.
+
+    Runs on a short interval so a row does not wait for the midnight crawled-posting job.
+    """
+    async with AsyncSessionLocal() as db:
+        try:
+            analyses_stmt, resumes_stmt = expired_user_resume_delete_stmts(datetime.now())
+            analysis_result = await db.execute(analyses_stmt)
+            resume_result = await db.execute(resumes_stmt)
+            await db.commit()
+            if resume_result.rowcount > 0:
+                print(
+                    f"[CLEANUP] Deleted {resume_result.rowcount} expired resumes "
+                    f"and {analysis_result.rowcount} match analyses"
+                )
+        except Exception as e:
+            await db.rollback()
+            print(f"[CLEANUP] Resume cleanup error: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle: connect Redis, prepare the database schema and run the scheduler.
 
     On startup it opens one async Redis client (the match-result cache), enables the pgvector
     extension, creates missing tables and starts the crawl (every 6 hours, first run shortly
-    after startup) and cleanup (daily at midnight) jobs.
+    after startup), crawled-posting cleanup (daily at midnight), and uploaded-resume cleanup
+    (every 10 minutes) jobs.
     On shutdown it stops the scheduler and closes that Redis client.
     """
     global rd
@@ -190,6 +250,7 @@ async def lifespan(app: FastAPI):
         scheduler = AsyncIOScheduler()
         scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
         scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
+        scheduler.add_job(cleanup_expired_resumes, 'interval', minutes=USER_RESUME_CLEANUP_MINUTES)
         scheduler.start()
         yield
         scheduler.shutdown()
@@ -224,8 +285,9 @@ async def process_resume(
 
     The upload is written to a uniquely named temporary file, which is always removed afterwards.
     Identical resume/location combinations are de-duplicated through an MD5 content hash
-    so the same resume is not parsed and embedded twice. The hash is stored in ``search_keyword``;
-    crawled postings keep using that column for the crawl keyword.
+    so the same resume is not parsed and embedded twice while that row still exists. After
+    the row is deleted, a later upload of the same file is embedded again. The hash is stored
+    in ``search_keyword``; crawled postings keep using that column for the crawl keyword.
 
     Returns the resume record id that the client passes to ``/match/{resume_id}``.
     """

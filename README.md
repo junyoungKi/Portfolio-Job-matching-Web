@@ -36,7 +36,7 @@ TODO(owner): add a screenshot or GIF at `docs/images/demo.gif` (upload resume, f
 - LLM re-ranking (`gpt-4o-mini`) of the candidates; the top 10 are returned.
 - Per-result summary and detailed analysis in both Korean and English, generated once per resume/job pair and stored.
 - Redis cache of match results (1 hour TTL); caching is skipped if Redis is unreachable.
-- Background jobs: LinkedIn crawl every 6 hours with AI-based tagging, and a daily cleanup of old postings.
+- Background jobs: LinkedIn crawl every 6 hours with AI-based tagging, daily deletion of crawled postings older than 30 days, and deletion of uploaded resumes older than 1 hour.
 - React dashboard (Korean/English UI, light/dark theme) served by FastAPI; the older static UI stays at `/legacy`.
 
 ## Architecture
@@ -64,8 +64,10 @@ flowchart LR
     D -->|yes| X[Skip]
     D -->|no| T[gpt-4o-mini: type, level, top skills<br/>+ embedding]
     T --> DB[(PostgreSQL + pgvector)]
-    S2[Daily at 00:00] --> CL[Delete postings older than 30 days<br/>keep USER_UPLOAD resumes]
+    S2[Daily at 00:00] --> CL[Delete crawled postings older than 30 days]
+    S3[Every 10 minutes] --> RL[Delete USER_UPLOAD resumes older than 1 hour<br/>and their match analyses]
     CL --> DB
+    RL --> DB
 ```
 
 Resumes and job postings share one table (`job_postings`); resumes are rows with `company = "USER_UPLOAD"`, so both live in the same embedding space.
@@ -93,7 +95,7 @@ Resumes and job postings share one table (`job_postings`); resumes are rows with
 - **HNSW index.** Declared in `app/models.py` with `m=16`, `ef_construction=64` and cosine ops. HNSW is approximate and uses more memory and build time than a plain scan; it pays off only with many postings. Whether the planner uses it for the current `/match` query (it orders by a computed `1 - cosine_distance` score) is not confirmed: TODO(owner): run `EXPLAIN ANALYZE` and record the result.
 - **Retrieve, then rerank.** Vector search narrows to 100 candidates cheaply; the LLM then orders them using the resume's first 500 characters and each job's title, company and skills. If the LLM call fails, the vector-similarity order is used. Trade-off: extra latency and cost per request, and the rerank sees only a short resume excerpt.
 - **Redis cache plus stored analyses.** Match results are cached for 1 hour per resume and filter combination. KO/EN analyses are stored in `match_analyses` so each pair is generated only once. Trade-off: cached results can be up to an hour stale.
-- **Resume de-duplication.** An MD5 of resume text + location is stored in `search_keyword`; re-uploading the same combination returns the existing record without re-embedding. Crawled postings still store the crawl keyword (for example "Software Engineer") in that column.
+- **Resume de-duplication.** An MD5 of resume text + location is stored in `search_keyword`; re-uploading the same combination while that row still exists returns the existing record without re-embedding. After the row is deleted, a later upload is embedded again. Crawled postings still store the crawl keyword (for example "Software Engineer") in that column.
 - **Single table for resumes and postings.** Simple to compare; the cost is that every query on postings must exclude `USER_UPLOAD` rows.
 
 ## Performance
@@ -271,7 +273,7 @@ Rollback: `git log --oneline -n 10`. While this compose file is still checked ou
 ## Limitations
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.
-- Uploaded resumes are never deleted; the 30-day cleanup applies to crawled postings only.
+- Uploaded resumes and their match analyses are deleted after 1 hour. The 30-day cleanup applies to crawled postings only.
 - The crawler searches only for "Software Engineer" in 8 cities and reads one result page (25 cards) per city per run. Matching uses the resume embedding, location, and the level, type, and skill filters.
 - De-duplication matches on exact title and company, so the same role in two cities counts as one posting.
 - Salary is not collected: every crawled posting is stored with the placeholder "Competitive Salary".

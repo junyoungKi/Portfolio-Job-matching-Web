@@ -193,9 +193,7 @@ docker compose up -d --build
 
 공개 사이트: <https://ai-job-matching.com>
 
-Cloudflare가 도메인을 프록시합니다 (`https://ai-job-matching.com`의 주황 구름 A 레코드). Always Use HTTPS로 HTTP를 HTTPS로 리다이렉트합니다. 방문자는 HTTPS를 사용합니다. Cloudflare가 공개 인증서에서 TLS를 종료합니다. 오리진은 443번 포트에서 Cloudflare Origin Certificate를 쓰고, Cloudflare에서 Lightsail까지의 구간은 HTTPS입니다. SSL/TLS 모드는 Full (strict)입니다.
-
-이력서와 같은 개인 데이터가 서버로 전송되므로, 계정이 아직 없어도 공개 사이트에는 HTTPS가 필요합니다. 나중에 로그인 기능을 추가할 때 자격 증명과 세션을 보호하기 위해서이기도 합니다. Full (strict)는 Lightsail 구간에도 그 암호화를 유지합니다.
+Cloudflare가 도메인을 프록시합니다 (`https://ai-job-matching.com`의 주황 구름 A 레코드). Always Use HTTPS로 HTTP를 HTTPS로 리다이렉트합니다. 방문자는 HTTPS를 사용합니다. Cloudflare가 공개 인증서에서 TLS를 종료합니다. SSL/TLS 모드는 Full (strict)로 설정되어 있습니다. 이 모드는 방문자 구간과 Cloudflare에서 Lightsail까지의 구간을 암호화하므로, 이력서 파일(계정이 생기기 전의 개인 데이터)과 이후 로그인의 자격 증명이 그 구간에서 평문으로 전송되지 않습니다. 오리진은 443번 포트에서 Cloudflare Origin Certificate를 사용합니다.
 
 아래 순서를 지키세요. 오리진 443이 응답하기 전에 Cloudflare를 Full (strict)로 바꾸면 error 525가 납니다.
 
@@ -229,13 +227,15 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### 배포
 
-`main`에 병합하면 GitHub Actions가 배포합니다. `.github/workflows/deploy.yml`이 GitHub 호스트 러너에서 Lightsail 인스턴스로 SSH 접속한 뒤 `deploy/lightsail.sh`를 실행합니다. 스크립트가 실패하면 작업도 실패합니다. 일회성 설정은 저장소 Actions 시크릿 세 개와, 그 키 쌍의 공개 키를 서버 사용자의 `~/.ssh/authorized_keys`에 넣는 것입니다.
+`main`에 병합하는 것이 배포입니다. `.github/workflows/deploy.yml`이 GitHub 호스트 러너에서 Lightsail 서버로 SSH 접속한 뒤 `deploy/lightsail.sh`를 실행합니다. 스크립트는 체크아웃을 `origin/main`으로 리셋하고, `web` 이미지를 빌드한 다음 `web`과 `caddy`를 다시 만듭니다. Redis와 `deploy/certs`는 삭제하지 않습니다 (`git reset --hard`는 gitignore된 파일을 남기고, 스크립트는 `git clean`을 하지 않으며 Redis 컨테이너도 지우지 않습니다). 스크립트가 실패하면 작업도 실패합니다. 일회성 설정은 저장소 Actions 시크릿 세 개와, 그 키 쌍의 공개 키를 서버 사용자의 `~/.ssh/authorized_keys`에 넣는 것입니다.
 
 - `LIGHTSAIL_HOST`: 인스턴스의 공인 IP 또는 DNS
 - `LIGHTSAIL_USER`: `ubuntu`
 - `LIGHTSAIL_SSH_KEY`: 개인 키 PEM
 
 개인 키, 공인 IP, 시크릿 값은 커밋하지 마세요.
+
+인스턴스를 직접 갱신할 때:
 
 ```bash
 cd ~/Portfolio-Job-matching-Web

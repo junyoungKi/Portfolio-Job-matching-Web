@@ -195,9 +195,7 @@ Production runs on an AWS Lightsail instance with docker-compose 1.29.2. Compose
 
 Public site: <https://ai-job-matching.com>
 
-Cloudflare proxies the domain (orange-cloud A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates the public certificate. The origin uses a Cloudflare Origin Certificate on port 443, and the hop from Cloudflare to Lightsail is HTTPS. The SSL/TLS mode is Full (strict).
-
-Resumes and similar personal data are sent to the server, so the public site needs HTTPS even before accounts exist. HTTPS is also there so a later login feature can protect credentials and sessions. Full (strict) keeps that encryption on the Lightsail hop as well.
+Cloudflare proxies the domain (orange-cloud A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates the public certificate. SSL/TLS mode is set to Full (strict). That mode encrypts the visitor path and the Cloudflare-to-Lightsail path, so resume files (personal data, even before accounts exist) and a later login's credentials are not sent in cleartext on those hops. The origin uses a Cloudflare Origin Certificate on port 443.
 
 Do these steps in order. Switching Cloudflare to Full (strict) before origin port 443 answers causes error 525.
 
@@ -231,13 +229,15 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### Deploy
 
-Merging to `main` deploys via GitHub Actions. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail instance, and runs `deploy/lightsail.sh`. The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
+Merging to `main` is the deploy. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail server, and runs `deploy/lightsail.sh`. The script resets the checkout to `origin/main`, builds the `web` image, and recreates `web` and `caddy`. It does not delete Redis or `deploy/certs` (`git reset --hard` leaves gitignored files, and the script does not `git clean` or remove the Redis container). The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
 
 - `LIGHTSAIL_HOST`: public IP or DNS of the instance
 - `LIGHTSAIL_USER`: `ubuntu`
 - `LIGHTSAIL_SSH_KEY`: private key PEM
 
 Do not commit the private key, the public IP, or any secret value.
+
+To update the instance by hand:
 
 ```bash
 cd ~/Portfolio-Job-matching-Web

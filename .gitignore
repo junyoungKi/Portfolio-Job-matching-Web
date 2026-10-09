@@ -81,3 +81,12 @@ postgres-data/
 # -----------------
 logs/
 *.log
+
+# -----------------
+# Cloudflare Origin Certificate
+# -----------------
+# Example filenames: deploy/certs/origin.pem and deploy/certs/origin-key.pem
+# See deploy/certs/README.txt. Never commit the certificate or private key.
+deploy/certs/*
+!deploy/certs/.gitignore
+!deploy/certs/README.txt

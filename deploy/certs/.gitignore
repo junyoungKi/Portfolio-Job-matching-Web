@@ -1,0 +1,5 @@
+# Ignore certificate and key material in this directory.
+# Example filenames: origin.pem and origin-key.pem
+*
+!.gitignore
+!README.txt

@@ -39,3 +39,6 @@ Thumbs.db
 *.jpeg
 *.png
 docker-compose*.yml
+
+# Origin certificate and private key are mounted into Caddy at runtime.
+deploy/certs/

@@ -174,39 +174,89 @@ Note: `seed_jobs.py` imports a `SessionLocal` that no longer exists in `app/data
 ## Run with Docker Compose
 
 ```bash
-# .env as above, but DATABASE_URL must point to a reachable PostgreSQL with pgvector
+# .env as above, but DATABASE_URL must point to a reachable PostgreSQL with pgvector.
+# The Caddy proxy needs the origin certificate files in deploy/certs/ (see Deployment).
+# Without those files, start only the app:
+#   docker compose up -d --build web redis
 docker compose up -d --build
-# http://localhost/ and http://localhost:8000 both reach the app
+# http://localhost:8000 reaches the app directly
+# http://localhost redirects to HTTPS; https://localhost is the Caddy proxy
 ```
 
-`docker-compose.yml` starts `web` and `redis`. It does not start PostgreSQL; you supply the database through `DATABASE_URL`. The `web` service publishes host port 80 and host port 8000, both mapped to container port 8000. The Dockerfile is multi-stage: Node 22 builds the React app into the image, and Python 3.11 runs FastAPI with uvicorn (Chromium is included for the crawler).
+`docker-compose.yml` starts `web`, `redis`, and `caddy`. It does not start PostgreSQL; you supply the database through `DATABASE_URL`. `caddy` publishes `"80:80"` and `"443:443"`, redirects port 80 to HTTPS, and reverse-proxies to the `web` service on port 8000 over the compose network. `web` publishes `"8000:8000"` for on-host checks and does not publish `"80:8000"`. The Dockerfile is multi-stage: Node 22 builds the React app into the image, and Python 3.11 runs FastAPI with uvicorn (Chromium is included for the crawler).
+
+The certificate mounted on 443 is a Cloudflare Origin Certificate. Cloudflare trusts it. Browsers and curl do not, so an on-host check uses `curl -k`. Visitors see Cloudflare's public certificate, not this one.
 
 ## Deployment (AWS Lightsail)
 
-Production runs on an AWS Lightsail instance with docker-compose v1. Compose starts `web` and `redis`. `web` is FastAPI served by uvicorn, and the React app is built into the image. Instance size and region: TODO(owner).
+Production runs on an AWS Lightsail instance with docker-compose 1.29.2. Compose starts `web`, `redis`, and `caddy`. `web` is FastAPI served by uvicorn, and the React app is built into the image. `caddy` terminates TLS with a Cloudflare Origin Certificate and proxies to `web`. Instance size and region: TODO(owner).
 
 Public site: <https://ai-job-matching.com>
 
-Cloudflare proxies the domain (proxied A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates TLS. The origin is HTTP on host port 80.
+Cloudflare proxies the domain (orange-cloud A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates the public certificate. The origin uses a Cloudflare Origin Certificate on port 443, and the hop from Cloudflare to Lightsail is HTTPS. The SSL/TLS mode is Full (strict).
 
-The host publishes `80:8000` so Cloudflare can reach the origin, and `8000:8000` so direct checks on the instance still work. Resumes and similar personal data are sent to the server, so the public site needs HTTPS even before accounts exist. HTTPS is also there so a later login feature can protect credentials and sessions.
+Resumes and similar personal data are sent to the server, so the public site needs HTTPS even before accounts exist. HTTPS is also there so a later login feature can protect credentials and sessions. Full (strict) keeps that encryption on the Lightsail hop as well.
+
+Do these steps in order. Switching Cloudflare to Full (strict) before origin port 443 answers causes error 525.
+
+1. Put the origin certificate on the server.
+2. Start the proxy.
+3. Confirm `https://127.0.0.1` (origin port 443) works.
+4. Open Lightsail TCP 443.
+5. Set Cloudflare SSL/TLS to Full (strict).
+
+After step 2, host port 80 redirects to HTTPS. While Cloudflare is still on Flexible it connects to the origin over HTTP, so the public site can redirect-loop until step 5. Finish steps 3–5 as soon as the on-host HTTPS check passes.
+
+### Origin certificate
+
+In the Cloudflare dashboard for this zone: SSL/TLS → Origin Server → Create Certificate.
+
+- Hostnames: `ai-job-matching.com` and `*.ai-job-matching.com` (that pair covers www and the apex; listing `ai-job-matching.com` and `www.ai-job-matching.com` is enough if you do not need other names).
+- Certificate key format: PEM.
+- Keep the default validity unless you need a shorter one. Cloudflare shows the private key once.
+
+On the server, from the repo root:
+
+```bash
+mkdir -p deploy/certs
+# Paste the Origin Certificate into origin.pem and the Private Key into origin-key.pem.
+# Example filenames (both gitignored): deploy/certs/origin.pem, deploy/certs/origin-key.pem
+chmod 644 deploy/certs/origin.pem
+chmod 600 deploy/certs/origin-key.pem
+```
+
+`deploy/certs/` is gitignored except `.gitignore` and `README.txt`. Do not commit the certificate or the private key. The files have to exist before `up`. If they are missing, Docker creates directories at those paths; remove the directories and put the PEM files back.
+
+### Deploy
 
 ```bash
 cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
-docker-compose down && docker-compose up -d --build
+
+# docker-compose 1.29.2 raises KeyError: 'ContainerConfig' when it recreates an
+# existing container. Remove the web container (and caddy, if it already exists)
+# with docker rm before up. Do not use `docker-compose down -v` (that deletes volumes).
+# `docker-compose ps -q` targets the service, so the directory name "Web" is not a problem.
+for svc in web caddy; do
+  id=$(docker-compose ps -q "$svc")
+  if [ -n "$id" ]; then docker rm -f "$id"; fi
+done
+docker-compose up -d --build
 docker-compose logs -f web             # wait for "Application startup complete"
 ```
 
-Always run `down` before `up -d --build`; the old `docker-compose` can fail with `KeyError: 'ContainerConfig'` otherwise. If it persists, remove the leftover container: `docker rm -f $(docker ps -aq --filter name=web)`.
-
-Verify on the instance (origin HTTP):
+Confirm origin TLS on the instance before changing Cloudflare:
 
 ```bash
-curl -s localhost:8000/stats           # {"total_jobs": N}
-curl -sI localhost:8000/ | head -1     # 200
-curl -sI localhost:80/ | head -1       # 200, the port Cloudflare uses
+curl -s localhost:8000/stats                 # {"total_jobs": N}
+curl -sI localhost:8000/ | head -1           # 200, direct to uvicorn
+curl -skI https://127.0.0.1/ | head -1       # 200 via Caddy (-k: Origin CA is not publicly trusted)
+curl -sI http://127.0.0.1/ | head -1         # 301 to https://127.0.0.1/
 ```
+
+Open Lightsail TCP 443: instance → Networking → IPv4 Firewall → add HTTPS, TCP 443. Leave TCP 80 open so the proxy can redirect it. Do not open host port 8000; that mapping is only for checks on the instance.
+
+Then set Cloudflare SSL/TLS → Overview to Full (strict).
 
 Verify the public site:
 
@@ -216,7 +266,7 @@ curl -sI http://ai-job-matching.com/ | head -1     # 301 to https://ai-job-match
 curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 ```
 
-Rollback: `git log --oneline -n 10`, check out the previous good commit, then `down` and `up -d --build` again. `/legacy/` stays available to compare against the old UI.
+Rollback: `git log --oneline -n 10`. While this compose file is still checked out, note the container ids (`docker-compose ps -q web` and `docker-compose ps -q caddy`), check out the previous good commit, `docker rm -f` those ids, then `up -d --build`. Do not use `docker-compose down -v`. The previous compose publishes port 80 on `web`, so caddy must be gone before that `up`. If Cloudflare is already Full (strict), set it back to Flexible only after origin port 80 serves HTTP again; Full (strict) against an HTTP origin returns error 525. `/legacy/` stays available to compare against the old UI.
 
 ## Limitations
 
@@ -234,7 +284,6 @@ Rollback: `git log --oneline -n 10`, check out the previous good commit, then `d
 
 - Login / sign-up and a job wishlist (PR #7)
 - Structured salary data and extra job sources (PR #8)
-- Caddy reverse proxy with Let's Encrypt on the instance (PR #5). Public HTTPS is the Cloudflare setup in Deployment; that configuration lives outside this repository.
 - PostgreSQL service in Docker Compose (PR #2) and a Redis connection fix for local runs (PR #1)
 - Auto-deploy to Lightsail on merge to `main` (PR #4)
 
@@ -246,6 +295,8 @@ Not started: an evaluation set for recommendation quality, rate limiting.
 app/            FastAPI app, models, services (ai, collector, parser)
 frontend/       React + Vite dashboard (see frontend/README.md)
 static/         Legacy UI served at /legacy
+Caddyfile       Origin TLS reverse proxy (Cloudflare Origin Certificate)
+deploy/certs/   origin.pem and origin-key.pem (gitignored; see README.txt)
 locustfile.py   Load test
 docs/images/    README images
 ```

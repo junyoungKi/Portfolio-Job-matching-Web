@@ -172,39 +172,89 @@ cd frontend && npm ci && npm run build && cd .. && python run.py
 ## Docker Compose로 실행
 
 ```bash
-# .env는 위와 같되, DATABASE_URL은 접근 가능한 pgvector PostgreSQL을 가리켜야 합니다
+# .env는 위와 같되, DATABASE_URL은 접근 가능한 pgvector PostgreSQL을 가리켜야 합니다.
+# Caddy 프록시에는 deploy/certs/ 의 오리진 인증서 파일이 필요합니다 (배포 절 참고).
+# 그 파일이 없으면 앱만 띄웁니다:
+#   docker compose up -d --build web redis
 docker compose up -d --build
-# http://localhost/ 와 http://localhost:8000 모두 앱에 연결됩니다
+# http://localhost:8000 은 앱에 직접 연결됩니다
+# http://localhost 는 HTTPS로 리다이렉트되고, https://localhost 는 Caddy 프록시입니다
 ```
 
-`docker-compose.yml`은 `web`과 `redis`만 띄우고 PostgreSQL은 포함하지 않습니다. 데이터베이스는 `DATABASE_URL`로 직접 지정해야 합니다. `web`은 호스트 80번 포트와 8000번 포트를 모두 컨테이너 8000번 포트에 연결합니다. Dockerfile은 멀티 스테이지입니다. Node 22가 React 앱을 이미지에 빌드하고, Python 3.11이 uvicorn으로 FastAPI를 실행합니다. 크롤러용 Chromium도 포함됩니다.
+`docker-compose.yml`은 `web`, `redis`, `caddy`를 띄우고 PostgreSQL은 포함하지 않습니다. 데이터베이스는 `DATABASE_URL`로 직접 지정해야 합니다. `caddy`는 `"80:80"`과 `"443:443"`을 열고, 80번을 HTTPS로 리다이렉트한 뒤 compose 네트워크의 `web` 서비스 8000번 포트로 전달합니다. `web`은 인스턴스에서 직접 확인하도록 `"8000:8000"`만 열며 `"80:8000"`은 열지 않습니다. Dockerfile은 멀티 스테이지입니다. Node 22가 React 앱을 이미지에 빌드하고, Python 3.11이 uvicorn으로 FastAPI를 실행합니다. 크롤러용 Chromium도 포함됩니다.
+
+443에 마운트하는 인증서는 Cloudflare Origin Certificate입니다. Cloudflare는 이 인증서를 신뢰하지만 브라우저와 curl은 신뢰하지 않으므로, 인스턴스 안에서는 `curl -k`로 확인합니다. 방문자에게 보이는 인증서는 이 파일이 아니라 Cloudflare의 공개 인증서입니다.
 
 ## 배포 (AWS Lightsail)
 
-프로덕션은 AWS Lightsail 인스턴스에서 docker-compose v1로 돌아갑니다. Compose는 `web`과 `redis`를 띄웁니다. `web`은 uvicorn으로 서빙하는 FastAPI이며, React 앱은 이미지 안에 빌드되어 있습니다. 인스턴스 사양과 리전: TODO(owner).
+프로덕션은 AWS Lightsail 인스턴스에서 docker-compose 1.29.2로 돌아갑니다. Compose는 `web`, `redis`, `caddy`를 띄웁니다. `web`은 uvicorn으로 서빙하는 FastAPI이며, React 앱은 이미지 안에 빌드되어 있습니다. `caddy`는 Cloudflare Origin Certificate로 TLS를 종료하고 `web`으로 프록시합니다. 인스턴스 사양과 리전: TODO(owner).
 
 공개 사이트: <https://ai-job-matching.com>
 
-Cloudflare가 도메인을 프록시합니다 (`https://ai-job-matching.com`의 프록시된 A 레코드). Always Use HTTPS로 HTTP를 HTTPS로 리다이렉트합니다. 방문자는 HTTPS를 사용합니다. TLS는 Cloudflare에서 종료됩니다. 오리진은 호스트 80번 포트의 HTTP입니다.
+Cloudflare가 도메인을 프록시합니다 (`https://ai-job-matching.com`의 주황 구름 A 레코드). Always Use HTTPS로 HTTP를 HTTPS로 리다이렉트합니다. 방문자는 HTTPS를 사용합니다. Cloudflare가 공개 인증서에서 TLS를 종료합니다. 오리진은 443번 포트에서 Cloudflare Origin Certificate를 쓰고, Cloudflare에서 Lightsail까지의 구간은 HTTPS입니다. SSL/TLS 모드는 Full (strict)입니다.
 
-호스트는 `80:8000`을 열어 Cloudflare가 오리진에 접속하게 하고, `8000:8000`을 열어 인스턴스에서 직접 확인할 수 있게 합니다. 이력서와 같은 개인 데이터가 서버로 전송되므로, 계정이 아직 없어도 공개 사이트에는 HTTPS가 필요합니다. 나중에 로그인 기능을 추가할 때 자격 증명과 세션을 보호하기 위해서이기도 합니다.
+이력서와 같은 개인 데이터가 서버로 전송되므로, 계정이 아직 없어도 공개 사이트에는 HTTPS가 필요합니다. 나중에 로그인 기능을 추가할 때 자격 증명과 세션을 보호하기 위해서이기도 합니다. Full (strict)는 Lightsail 구간에도 그 암호화를 유지합니다.
+
+아래 순서를 지키세요. 오리진 443이 응답하기 전에 Cloudflare를 Full (strict)로 바꾸면 error 525가 납니다.
+
+1. 오리진 인증서를 서버에 둡니다.
+2. 프록시를 시작합니다.
+3. `https://127.0.0.1`(오리진 443)이 동작하는지 확인합니다.
+4. Lightsail에서 TCP 443을 엽니다.
+5. Cloudflare SSL/TLS를 Full (strict)로 설정합니다.
+
+2번 이후 호스트 80번은 HTTPS로 리다이렉트됩니다. Cloudflare가 아직 Flexible이면 오리진에 HTTP로 접속하므로, 5번을 끝낼 때까지 공개 사이트가 리다이렉트 루프에 빠질 수 있습니다. 인스턴스 HTTPS 확인이 되면 3–5번을 바로 이어서 하세요.
+
+### Origin Certificate
+
+이 존의 Cloudflare 대시보드에서 SSL/TLS → Origin Server → Create Certificate.
+
+- 호스트 이름: `ai-job-matching.com`과 `*.ai-job-matching.com` (이 쌍이면 www와 apex가 포함됩니다. 다른 이름이 필요 없으면 `ai-job-matching.com`과 `www.ai-job-matching.com`만 적어도 됩니다).
+- 인증서 키 형식: PEM.
+- 더 짧게 할 이유가 없으면 기본 유효 기간을 둡니다. 개인 키는 한 번만 표시됩니다.
+
+서버에서 저장소 루트 기준:
+
+```bash
+mkdir -p deploy/certs
+# Origin Certificate 본문은 origin.pem에, Private Key는 origin-key.pem에 붙여 넣습니다.
+# 예시 파일 이름 (둘 다 gitignore): deploy/certs/origin.pem, deploy/certs/origin-key.pem
+chmod 644 deploy/certs/origin.pem
+chmod 600 deploy/certs/origin-key.pem
+```
+
+`deploy/certs/`는 `.gitignore`와 `README.txt`를 제외하고 gitignore됩니다. 인증서와 개인 키는 커밋하지 마세요. `up` 전에 파일이 있어야 합니다. 파일이 없으면 Docker가 그 경로에 디렉터리를 만듭니다. 디렉터리를 지우고 PEM 파일을 다시 두세요.
+
+### 배포
 
 ```bash
 cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
-docker-compose down && docker-compose up -d --build
+
+# docker-compose 1.29.2는 기존 컨테이너를 다시 만들 때 KeyError: 'ContainerConfig'가 납니다.
+# up 전에 web 컨테이너를 docker rm으로 지웁니다. caddy가 이미 있으면 그것도 지웁니다.
+# `docker-compose down -v`는 쓰지 마세요. 볼륨이 삭제됩니다.
+# `docker-compose ps -q`는 서비스 단위라 디렉터리 이름에 들어 있는 "Web"과는 무관합니다.
+for svc in web caddy; do
+  id=$(docker-compose ps -q "$svc")
+  if [ -n "$id" ]; then docker rm -f "$id"; fi
+done
+docker-compose up -d --build
 docker-compose logs -f web             # "Application startup complete" 확인
 ```
 
-`up -d --build` 전에 반드시 `down`을 먼저 실행하세요. 그렇지 않으면 구버전 `docker-compose`에서 `KeyError: 'ContainerConfig'`가 날 수 있습니다. 계속되면 남은 컨테이너를 지웁니다: `docker rm -f $(docker ps -aq --filter name=web)`.
-
-인스턴스에서 확인 (오리진 HTTP):
+Cloudflare를 바꾸기 전에 인스턴스에서 오리진 TLS를 확인합니다.
 
 ```bash
-curl -s localhost:8000/stats           # {"total_jobs": N}
-curl -sI localhost:8000/ | head -1     # 200
-curl -sI localhost:80/ | head -1       # 200, Cloudflare가 접속하는 포트
+curl -s localhost:8000/stats                 # {"total_jobs": N}
+curl -sI localhost:8000/ | head -1           # 200, uvicorn에 직접
+curl -skI https://127.0.0.1/ | head -1       # 200, Caddy 경유 (-k: Origin CA는 공인 trust store에 없음)
+curl -sI http://127.0.0.1/ | head -1         # https://127.0.0.1/ 로 301
 ```
+
+Lightsail TCP 443 열기: 인스턴스 → Networking → IPv4 Firewall에서 HTTPS, TCP 443을 추가합니다. 프록시가 리다이렉트할 수 있도록 TCP 80은 열어 둡니다. 호스트 8000번은 열지 마세요. 그 매핑은 인스턴스 안의 확인용입니다.
+
+그 다음 Cloudflare SSL/TLS → Overview를 Full (strict)로 설정합니다.
 
 공개 사이트 확인:
 
@@ -214,7 +264,7 @@ curl -sI http://ai-job-matching.com/ | head -1     # https://ai-job-matching.com
 curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 ```
 
-롤백: `git log --oneline -n 10`으로 이전 정상 커밋을 찾아 체크아웃한 뒤 `down`, `up -d --build`를 다시 실행합니다. `/legacy/`는 이전 UI와 비교할 수 있도록 계속 접근 가능합니다.
+롤백: `git log --oneline -n 10`. 이 compose 파일이 아직 체크아웃된 상태에서 컨테이너 id를 적어둡니다 (`docker-compose ps -q web`, `docker-compose ps -q caddy`). 이전 정상 커밋으로 체크아웃한 뒤 그 id를 `docker rm -f`로 지우고 `up -d --build`를 실행합니다. `docker-compose down -v`는 쓰지 마세요. 이전 compose는 `web`이 80번을 쓰므로, 그 `up` 전에 caddy는 없어야 합니다. Cloudflare가 이미 Full (strict)이면, 오리진 80번이 다시 HTTP를 서빙한 다음에 Flexible로 되돌리세요. HTTP 오리진에 Full (strict)를 두면 error 525가 납니다. `/legacy/`는 이전 UI와 비교할 수 있도록 계속 접근 가능합니다.
 
 ## 한계
 
@@ -234,7 +284,6 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 
 - 로그인 / 회원가입과 관심 공고 저장 (PR #7)
 - 구조화된 연봉 데이터와 추가 공고 소스 (PR #8)
-- 인스턴스의 Caddy 리버스 프록시와 Let's Encrypt (PR #5). 공개 HTTPS는 배포 절의 Cloudflare 설정이며, 그 설정은 이 저장소 밖에 있습니다.
 - Docker Compose의 PostgreSQL 서비스 (PR #2), 로컬 실행 시 Redis 연결 수정 (PR #1)
 - `main` 병합 시 Lightsail 자동 배포 (PR #4)
 
@@ -246,6 +295,8 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 app/            FastAPI 앱, 모델, 서비스 (ai, collector, parser)
 frontend/       React + Vite 대시보드 (frontend/README.md 참고)
 static/         /legacy 에서 서빙되는 이전 UI
+Caddyfile       오리진 TLS 리버스 프록시 (Cloudflare Origin Certificate)
+deploy/certs/   origin.pem, origin-key.pem (gitignore, README.txt 참고)
 locustfile.py   부하 테스트
 docs/images/    README 이미지
 ```

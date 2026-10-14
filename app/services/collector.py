@@ -66,7 +66,7 @@ class JobCollector:
                                     "company": (await company_el.inner_text()).strip(),
                                     "url": await link_el.get_attribute("href")
                                 })
-                        except: continue
+                        except Exception: continue
 
                     await page.close()
 
@@ -98,7 +98,7 @@ class JobCollector:
                                 await detail_page.wait_for_selector(desc_selector, timeout=10000)
                                 desc_el = await detail_page.query_selector(desc_selector)
                                 description = (await desc_el.inner_text()).strip() if desc_el else ""
-                            except:
+                            except Exception:
                                 description = f"Unable to load the job details for {target['title']}."
 
                             jobs.append({

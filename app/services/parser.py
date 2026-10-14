@@ -14,7 +14,7 @@ class ResumeParser:
 
     async def extract_text(self, file_path: str) -> str:
         """Parse the PDF at ``file_path`` in a worker thread so the event loop is not blocked."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._parse_pdf, file_path)
 
     def _parse_pdf(self, file_path: str) -> str:

@@ -90,3 +90,6 @@ logs/
 deploy/certs/*
 !deploy/certs/.gitignore
 !deploy/certs/README.txt
+
+# Load-test output (see docs/load-testing.md)
+loadtest/results/

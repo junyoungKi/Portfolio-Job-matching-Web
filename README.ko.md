@@ -99,9 +99,9 @@ flowchart LR
 
 ## 성능
 
-부하 테스트(`locustfile.py`)는 `GET /stats`(가중치 2)와 `POST /process-resume`(가중치 1)를 보냅니다. 업로드는 `test_resume.pdf`와 `location=North America`를 쓰고 작업 사이에 1~3초 대기합니다. `/match/{id}`는 **호출하지 않습니다**.
+부하 테스트(`locustfile.py`)는 `GET /stats`, 생성한 다양한 이력서를 쓰는 `POST /process-resume`, 그리고 warm(캐시) 또는 cold(전체 LLM 파이프라인) 모드의 `GET /match/{id}`를 다룹니다. LLM 스텁(API 키와 비용 없음)을 쓰는 공정한 전후 비교 방법은 [docs/load-testing.md](docs/load-testing.md)를 참고하세요(영어 문서).
 
-모든 업로드가 같은 파일과 지역을 쓰기 때문에 첫 요청 이후에는 콘텐츠 해시 중복 검사 경로로 들어가 임베딩 호출을 건너뛸 것으로 보입니다. 따라서 아래 수치는 파싱, DB 접근, 업로드 경로의 성능이며, OpenAI 호출을 반복한 결과가 아닙니다.
+아래 스크린샷과 표는 이전 스크립트로 한 실행의 결과입니다. 그 스크립트는 `GET /stats`와 `POST /process-resume`(고정 파일 하나)만 보냈고 `/match/{id}`는 **호출하지 않았습니다**. 첫 요청 이후 업로드는 콘텐츠 해시 중복 검사 경로로 들어가 임베딩 호출을 건너뛰므로, 이 수치는 파싱, DB 접근, 업로드 경로의 성능이며 OpenAI 호출이나 `/match`의 결과가 아닙니다.
 
 <!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
 ![Locust 리포트, async 버전](docs/images/locust-after-async.jpeg)
@@ -286,7 +286,8 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 - LinkedIn 스크래핑은 차단되거나 HTML이 바뀌면 깨질 수 있고, 이용 약관과 충돌할 수 있습니다.
 - PDF만 지원하며, 텍스트 레이어가 없는 스캔 PDF는 쓸 수 있는 텍스트가 나오지 않습니다.
 - 추천 품질을 평가하지 않았고(Hit@10 / NDCG 없음) 자동화된 단위 테스트도 없습니다. `test_concurrent.py`와 `locustfile.py`는 수동 부하 스크립트입니다.
-- 캐시되지 않은 결과마다 LLM을 두 번(KO, EN) 순차적으로 호출합니다.
+- 캐시되지 않은 `/match` 결과마다 최대 10개 공고 x 2회(KO, EN) LLM을 호출합니다. 호출은 동시에 실행되며 `LLM_MAX_CONCURRENCY`(기본 8, 프로세스 전체 공유)로 제한됩니다.
+- uvicorn은 프로세스 하나(기본값)로 실행하세요. `--workers N`을 추가하면 모든 워커에서 스케줄러가 시작되어 크롤과 정리 작업이 N번 실행되고(Chromium N개), 워커마다 DB 풀(`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`), Redis 클라이언트, `LLM_MAX_CONCURRENCY` 제한이 따로 생깁니다. 확장하기 전에 스케줄러를 별도 프로세스로 옮기세요.
 
 ## 로드맵
 
@@ -307,6 +308,8 @@ static/         /legacy 에서 서빙되는 이전 UI
 Caddyfile       오리진 TLS 리버스 프록시 (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem, origin-key.pem (gitignore, README.txt 참고)
 deploy/lightsail.sh  GitHub Actions가 실행하는 Lightsail 배포 스크립트
-locustfile.py   부하 테스트
+locustfile.py   부하 테스트 (stats, 업로드, /match)
+loadtest/       부하 테스트용 가짜 OpenAI 서버, 시드 스크립트, 실행 도우미
+test_*.py       pytest 테스트 (`pytest -q`, API 키/Postgres/Redis 불필요)
 docs/images/    README 이미지
 ```

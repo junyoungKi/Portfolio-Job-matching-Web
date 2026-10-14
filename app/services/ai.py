@@ -13,7 +13,34 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _env_number(name: str, default, cast):
+    """Read a numeric setting from the environment, falling back to ``default`` when unset or invalid."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        print(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    return value if value >= 0 else default
+
+
+# Per-attempt timeout in seconds. The SDK default (600 s) lets one hung call pin a request and its
+# DB connection for ten minutes. Worst case for one call is roughly
+# OPENAI_TIMEOUT_SECONDS * (OPENAI_MAX_RETRIES + 1) plus the SDK's short retry backoff.
+OPENAI_TIMEOUT_SECONDS = _env_number("OPENAI_TIMEOUT_SECONDS", 30.0, float)
+OPENAI_MAX_RETRIES = _env_number("OPENAI_MAX_RETRIES", 2, int)
+
+# OPENAI_BASE_URL (read by the SDK itself) can point this client at an OpenAI-compatible server,
+# for example the fake one in loadtest/fake_openai.py used for load tests.
+client = AsyncOpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=OPENAI_TIMEOUT_SECONDS,
+    max_retries=OPENAI_MAX_RETRIES,
+)
 
 class AIService:
     """Thin wrapper around the OpenAI client exposing the AI operations used by the API and crawler."""
@@ -45,7 +72,7 @@ class AIService:
                 response_format={ "type": "json_object" }
             )
             return json.loads(response.choices[0].message.content)
-        except:
+        except Exception:
             return {"employment_type": "Full-time", "experience_level": "Junior", "skills": []}
 
     async def rerank_jobs(self, resume_text: str, jobs: list, preferred_skills: list = None):
@@ -71,7 +98,7 @@ class AIService:
             response = await client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0)
             content = response.choices[0].message.content
             return json.loads(content)
-        except:
+        except Exception:
             return list(range(len(jobs)))
 
     async def analyze_match(self, resume_text: str, job_description: str, lang: str = "ko"):
@@ -105,7 +132,7 @@ class AIService:
                     detail = "\n".join([f"- {i}" for i in detail])
             data["detail_analysis"] = str(detail)
             return data
-        except:
+        except Exception:
             return {"job_summary": "Error", "detail_analysis": "AI analysis failed"}
 
 # Shared singleton used across the application.

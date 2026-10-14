@@ -1,0 +1,4 @@
+# Development and test dependencies: the runtime requirements plus the test tooling.
+-r requirements.txt
+pytest
+httpx

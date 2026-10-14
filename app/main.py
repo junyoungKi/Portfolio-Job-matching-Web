@@ -11,6 +11,7 @@ Responsibilities:
     - Serves the React dashboard (``frontend/dist``) at ``/`` and the legacy static UI at ``/legacy``.
 """
 import sys, asyncio, os, shutil, time, json, redis, hashlib
+import redis.asyncio
 import aiofiles
 import uuid
 import traceback
@@ -272,8 +273,54 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     total = result.scalar()
     return {"total_jobs": total}
 
+def _env_int(name: str, default: int) -> int:
+    """Read a non-negative integer setting from the environment, falling back to ``default``."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    return value if value >= 0 else default
+
+
 # Limits concurrent resume parsing/embedding so that bursts of uploads cannot exhaust resources.
 parse_semaphore = asyncio.Semaphore(10)
+
+# Caps how many OpenAI chat calls (the /match analyses) are in flight at once across all requests.
+# Within one request the analyses run concurrently; this semaphore keeps a burst of requests from
+# fanning out into an unbounded number of simultaneous API calls (and rate-limit errors).
+LLM_MAX_CONCURRENCY = max(1, _env_int("LLM_MAX_CONCURRENCY", 8))
+llm_semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
+
+# Largest accepted resume upload. Resumes are small PDFs; the cap keeps one request from holding
+# an arbitrarily large body in memory while it is written to disk and parsed.
+MAX_UPLOAD_BYTES = max(1, _env_int("MAX_UPLOAD_MB", 10)) * 1024 * 1024
+
+
+async def _bounded(coro):
+    """Await ``coro`` while holding one slot of the shared LLM concurrency limit."""
+    async with llm_semaphore:
+        return await coro
+
+
+def _is_readable(path: str) -> bool:
+    """Return True once ``path`` can be opened for reading (synchronous; call via ``to_thread``)."""
+    try:
+        with open(path, "rb"):
+            return True
+    except (PermissionError, FileNotFoundError):
+        return False
+
+
+def _remove_quietly(path: str) -> None:
+    """Delete ``path`` if it exists, ignoring errors (synchronous; call via ``to_thread``)."""
+    try:
+        os.remove(path)
+    except Exception:
+        pass
 
 @app.post("/process-resume")
 async def process_resume(
@@ -291,13 +338,20 @@ async def process_resume(
 
     Returns the resume record id that the client passes to ``/match/{resume_id}``.
     """
-    os.makedirs("temp_uploads", exist_ok=True)
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
+
+    await asyncio.to_thread(os.makedirs, "temp_uploads", exist_ok=True)
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.join("temp_uploads", unique_filename)
     
     try:
+        # Read one byte past the limit so an oversize body is detected without loading all of it.
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
+
         async with aiofiles.open(file_path, 'wb') as buffer:
-            content = await file.read()
             await buffer.write(content)
             await buffer.flush()
             
@@ -308,15 +362,11 @@ async def process_resume(
         file_ready = False
         
         for _ in range(max_retries):
-            try:
-                with open(file_path, 'rb') as f:
-                    file_ready = True
-                    break
-            except PermissionError:
-                await asyncio.sleep(retry_delay)
-            except FileNotFoundError:
-                await asyncio.sleep(retry_delay)
-                
+            if await asyncio.to_thread(_is_readable, file_path):
+                file_ready = True
+                break
+            await asyncio.sleep(retry_delay)
+
         if not file_ready:
             raise HTTPException(status_code=500, detail="The file could not be opened due to a system delay.")
 
@@ -340,13 +390,12 @@ async def process_resume(
                         "parsed_text_preview": str(text_content)
                     }
 
-                # get_embedding may return a coroutine or a plain value, so handle both.
-                res = ai_service.get_embedding(text_content)
-                if asyncio.iscoroutine(res):
-                    resume_vector = await res
-                else:
-                    resume_vector = res
-                
+                # Nothing read so far is needed later, so end the read transaction and return the
+                # connection to the pool before the slow OpenAI call.
+                await db.rollback()
+
+                resume_vector = await ai_service.get_embedding(text_content)
+
                 new_resume = models.JobPosting(
                     title=f"RESUME: {file.filename}", 
                     company="USER_UPLOAD", 
@@ -371,11 +420,7 @@ async def process_resume(
                 print(f"Parsing/saving error: {e}")
                 raise HTTPException(status_code=500, detail="Analysis failed")
     finally:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
+        await asyncio.to_thread(_remove_quietly, file_path)
 
 @app.get("/match/{resume_id}")
 async def match_jobs(
@@ -441,47 +486,89 @@ async def match_jobs(
 
     jobs_only = [c[0] for c in candidates]
     scores_dict = {c[0].id: c[1] for c in candidates}
-    
+    resume_text = resume.description
+
+    # Everything needed from the database so far has been loaded (ORM objects stay usable after
+    # commit because expire_on_commit=False). End the read transaction so the connection goes
+    # back to the pool instead of being held through the slow LLM calls below.
+    await db.commit()
+
     # The LLM returns indices into jobs_only in priority order; only the top 10 are returned.
-    order = await ai_service.rerank_jobs(resume.description, jobs_only, preferred_skills=skills)
-    
-    results = []
+    order = await ai_service.rerank_jobs(resume_text, jobs_only, preferred_skills=skills)
+
+    ranked_jobs = []
     for idx in order[:10]:
         if idx >= len(jobs_only): 
             continue
-        job = jobs_only[idx]
-        
-        analysis_stmt = select(models.MatchAnalysis).filter(
-            models.MatchAnalysis.resume_id == resume_id, 
-            models.MatchAnalysis.job_id == job.id
-        )
-        analysis_res = await db.execute(analysis_stmt)
-        analysis = analysis_res.scalars().first()
+        ranked_jobs.append(jobs_only[idx])
 
-        # Analyses are cached in the DB per (resume, job) pair to avoid repeated LLM calls.
-        if not analysis:
-            ko = await ai_service.analyze_match(resume.description, job.description, lang="ko")
-            en = await ai_service.analyze_match(resume.description, job.description, lang="en")
-            analysis = models.MatchAnalysis(
+    # Analyses are cached in the DB per (resume, job) pair to avoid repeated LLM calls. Fetch all
+    # existing ones for the top jobs in a single query (instead of one query per job).
+    job_ids = list(dict.fromkeys(job.id for job in ranked_jobs))
+    analyses = {}
+    if job_ids:
+        cached_result = await db.execute(
+            select(models.MatchAnalysis)
+            .filter(
+                models.MatchAnalysis.resume_id == resume_id,
+                models.MatchAnalysis.job_id.in_(job_ids),
+            )
+            .order_by(models.MatchAnalysis.id)
+        )
+        for row in cached_result.scalars().all():
+            analyses.setdefault(
+                row.job_id,
+                (row.summary_ko, row.analysis_ko, row.summary_en, row.analysis_en),
+            )
+
+    jobs_by_id = {job.id: job for job in ranked_jobs}
+    missing_jobs = [jobs_by_id[job_id] for job_id in job_ids if job_id not in analyses]
+
+    if missing_jobs:
+        # Release the connection again before the LLM calls. The tasks below only use plain
+        # values and never touch the AsyncSession, which is not safe to share across tasks.
+        await db.commit()
+
+        llm_calls = [
+            _bounded(ai_service.analyze_match(resume_text, job.description, lang=lang))
+            for job in missing_jobs
+            for lang in ("ko", "en")
+        ]
+        generated = await asyncio.gather(*llm_calls)
+
+        new_rows = []
+        for n, job in enumerate(missing_jobs):
+            ko, en = generated[2 * n], generated[2 * n + 1]
+            row = models.MatchAnalysis(
                 resume_id=resume_id, job_id=job.id,
                 summary_ko=ko.get("job_summary", ""), analysis_ko=ko.get("detail_analysis", ""),
                 summary_en=en.get("job_summary", ""), analysis_en=en.get("detail_analysis", "")
             )
-            db.add(analysis)
-            await db.commit()
+            new_rows.append(row)
+            analyses[job.id] = (row.summary_ko, row.analysis_ko, row.summary_en, row.analysis_en)
 
+        db.add_all(new_rows)
+        await db.commit()
+
+    results = []
+    for job in ranked_jobs:
+        summary_ko, analysis_ko, summary_en, analysis_en = analyses[job.id]
         results.append({
             "title": str(job.title), "company": str(job.company), 
             "location": str(job.location), "salary": str(job.salary), 
             "match_score": round(float(scores_dict[job.id]), 4),
-            "summary_ko": analysis.summary_ko, "analysis_ko": analysis.analysis_ko,
-            "summary_en": analysis.summary_en, "analysis_en": analysis.analysis_en,
+            "summary_ko": summary_ko, "analysis_ko": analysis_ko,
+            "summary_en": summary_en, "analysis_en": analysis_en,
             "skills": job.skills 
         })
 
+    # A cache write failure must never turn an already computed answer into an error.
     cache = rd
     if cache:
-        await cache.setex(cache_key, 3600, json.dumps(results))
+        try:
+            await cache.setex(cache_key, 3600, json.dumps(results))
+        except Exception as e:
+            print(f"Redis write error: {e}")
     return results
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

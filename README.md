@@ -100,9 +100,9 @@ Resumes and job postings share one table (`job_postings`); resumes are rows with
 
 ## Performance
 
-The load test (`locustfile.py`) sends two request types: `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, with 1-3 s wait between tasks. It does **not** call `/match/{id}`.
+The load test (`locustfile.py`) covers `GET /stats`, `POST /process-resume` with varied generated resumes, and `GET /match/{id}` in a warm (cached) or cold (full LLM pipeline) mode. See [docs/load-testing.md](docs/load-testing.md) for how to run a fair before/after comparison with a stub LLM (no API key or cost).
 
-Because every upload uses the same file and location, requests after the first should hit the content-hash de-duplication path and skip the embedding call. The numbers below therefore reflect parsing, DB access and the upload path, not repeated OpenAI calls.
+The screenshot and table below come from an earlier run of the previous script, which sent only `GET /stats` and `POST /process-resume` with one fixed file and did **not** call `/match/{id}`. After the first request, those uploads hit the content-hash de-duplication path and skip the embedding call, so those numbers reflect parsing, DB access and the upload path, not OpenAI calls or `/match`.
 
 <!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
 
@@ -288,7 +288,8 @@ Rollback: `git log --oneline -n 10`. While this compose file is still checked ou
 - Scraping LinkedIn can be blocked or break when its HTML changes, and may conflict with its terms of use.
 - PDF only; scanned PDFs without a text layer produce no usable text.
 - Recommendation quality has not been evaluated (no Hit@10 / NDCG), and there are no automated unit tests; `test_concurrent.py` and `locustfile.py` are manual load scripts.
-- Each uncached result triggers two LLM calls (KO and EN), made sequentially.
+- Each uncached `/match` result triggers up to 10 jobs x 2 LLM calls (KO and EN). They run concurrently, capped by `LLM_MAX_CONCURRENCY` (default 8, shared by the whole process).
+- Run one uvicorn process (the default). Adding `--workers N` starts the scheduler in every worker, so the crawl and cleanup jobs would run N times (N Chromium instances), and each worker has its own DB pool (`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`), Redis client and `LLM_MAX_CONCURRENCY` limit. Move the scheduler to its own process before scaling out.
 
 ## Roadmap
 
@@ -307,6 +308,8 @@ static/         Legacy UI served at /legacy
 Caddyfile       Origin TLS reverse proxy (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem and origin-key.pem (gitignored; see README.txt)
 deploy/lightsail.sh  Lightsail deploy script run by GitHub Actions
-locustfile.py   Load test
+locustfile.py   Load test (stats, upload, /match)
+loadtest/       Fake OpenAI server, seed script and run helpers for load tests
+test_*.py       pytest tests (run `pytest -q`; no API keys, Postgres or Redis needed)
 docs/images/    README images
 ```

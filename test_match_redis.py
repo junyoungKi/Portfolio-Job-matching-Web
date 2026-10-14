@@ -74,6 +74,7 @@ class Session:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = 0
+        self.commits = 0
 
     async def execute(self, stmt):
         self.calls += 1
@@ -85,7 +86,8 @@ class Session:
         raise AssertionError("this test does not expect a new match analysis")
 
     async def commit(self):
-        raise AssertionError("this test does not expect a commit")
+        # /match ends its read transaction before slow LLM calls; nothing is written here.
+        self.commits += 1
 
 
 def _use_db(session):
@@ -376,6 +378,7 @@ def test_match_cache_miss_awaits_setex_for_one_hour(monkeypatch):
         skills="Python",
     )
     analysis = SimpleNamespace(
+        job_id=7,
         summary_ko="요약",
         analysis_ko="분석",
         summary_en="summary",
@@ -384,7 +387,7 @@ def test_match_cache_miss_awaits_setex_for_one_hour(monkeypatch):
     session = Session([
         Rows(first=resume),
         Rows(rows=[(job, 0.91234)]),
-        Rows(first=analysis),
+        Rows(rows=[analysis]),
     ])
 
     async def rerank(resume_text, jobs, preferred_skills=None):

@@ -20,9 +20,39 @@ SQLALCHEMY_DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql+asyncpg://user:password@localhost:5432/job_match"
 )
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a non-negative integer setting from the environment, falling back to ``default``."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    return value if value >= 0 else default
+
+
+# Connection pool settings, explicit and env-configurable so a deployment or load test can size the
+# pool deliberately. The defaults equal SQLAlchemy's own (5 + 10 overflow, 30 s wait), so behaviour
+# is unchanged until you override them. The pool is per process: with N uvicorn workers the server
+# can open N * (DB_POOL_SIZE + DB_MAX_OVERFLOW) connections, which must stay below Postgres'
+# max_connections.
+DB_POOL_SIZE = _env_int("DB_POOL_SIZE", 5)
+DB_MAX_OVERFLOW = _env_int("DB_MAX_OVERFLOW", 10)
+DB_POOL_TIMEOUT = _env_int("DB_POOL_TIMEOUT", 30)
+
 # 1. Create the async engine.
 # Keeping echo=False stops SQL statements from being printed to the terminal, which improves speed.
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL, echo=False)
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    echo=False,
+    pool_size=DB_POOL_SIZE,
+    max_overflow=DB_MAX_OVERFLOW,
+    pool_timeout=DB_POOL_TIMEOUT,
+)
 # Log only the host/database part of the URL so that credentials are never printed.
 masked_url = SQLALCHEMY_DATABASE_URL.split("@")[-1] if "@" in SQLALCHEMY_DATABASE_URL else SQLALCHEMY_DATABASE_URL
 print(f"[DB Connection Target]: {masked_url}")

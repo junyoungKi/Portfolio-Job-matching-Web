@@ -47,6 +47,13 @@ class _Result:
     def scalars(self):
         return _Scalars(self._row)
 
+    def all(self):
+        # The batch lookup asks for (title, company) rows. A truthy ``exists`` stands
+        # for the default card in these tests (Role @ Acme) already being stored.
+        if not self._row:
+            return []
+        return [("Role", "Acme")]
+
 
 class Session:
     open_count = 0
@@ -77,6 +84,9 @@ class Session:
 
     def add(self, row):
         self.added = row
+
+    def add_all(self, rows):
+        self.added = list(rows)
 
     async def commit(self):
         if self.fail_commit:

@@ -10,10 +10,11 @@ Responsibilities:
     - Exposes the REST API: ``/stats``, ``/process-resume`` and ``/match/{resume_id}``.
     - Serves the React dashboard (``frontend/dist``) at ``/`` and the legacy static UI at ``/legacy``.
 """
-import sys, asyncio, os, shutil, time, json, redis, hashlib
+import sys, asyncio, os, re, shutil, time, json, redis, hashlib
 import aiofiles
 import uuid
 import traceback
+from urllib.parse import parse_qs, urlparse
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -165,6 +166,21 @@ USING hnsw (embedding vector_cosine_ops)
 WITH (m = 16, ef_construction = 64)
 """
 
+# create_all() does not add a column to a table that already exists. These two statements
+# add source_job_id on a database created before the column. They do not rewrite rows,
+# and they do not change ix_job_postings_embedding_hnsw. asyncpg rejects several
+# commands in one prepared statement, so the column and the index are separate.
+SOURCE_JOB_ID_COLUMN_SQL = (
+    "ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS source_job_id VARCHAR"
+)
+SOURCE_JOB_ID_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS ix_job_postings_source_job_id "
+    "ON job_postings (source_job_id)"
+)
+
+# Trailing digit run on a /jobs/view/<slug>-<id> or /jobs/view/<id> path segment.
+_LINKEDIN_JOB_ID = re.compile(r"(?:.*-)?(\d{6,})\Z")
+
 
 def vector_extension_supports_iterative_scan(version: Optional[str]) -> bool:
     """True when the installed pgvector is at least 0.8 (iterative HNSW scans)."""
@@ -300,11 +316,162 @@ class _CrawlCounts:
         self.failed += other.failed
 
 
-def existing_title_company_stmt(pairs):
-    """One lookup for every (title, company) pair already stored. Dedup key is that pair."""
-    return select(models.JobPosting.title, models.JobPosting.company).where(
-        tuple_(models.JobPosting.title, models.JobPosting.company).in_(pairs)
+def linkedin_job_id(url):
+    """Return the LinkedIn job id in ``url``, or None when the URL has no id.
+
+    Card links look like ``/jobs/view/<slug>-<id>`` or ``/jobs/view/<id>``. Search links
+    sometimes carry the id only as ``currentJobId``. The id is a trailing run of at least
+    six digits, so a year or a short number in a slug is not treated as an id.
+    """
+    if not isinstance(url, str):
+        return None
+    raw = url.strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    query = parse_qs(parsed.query)
+    for key in ("currentJobId", "jobId"):
+        for value in query.get(key, []):
+            if value.isdigit() and len(value) >= 6:
+                return value
+    segment = ""
+    if parsed.path:
+        segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    match = _LINKEDIN_JOB_ID.fullmatch(segment)
+    if match:
+        return match.group(1)
+    return None
+
+
+def normalize_dedup_text(value):
+    """Lowercase and collapse whitespace. None becomes an empty string.
+
+    This is the same transformation as the SQL fallback (``lower``, ``btrim``, and
+    collapsed whitespace). It does not treat two company spellings as one company.
+    """
+    if value is None:
+        return ""
+    return " ".join(str(value).lower().split())
+
+
+def posting_identity(job):
+    """Primary key ``source_job_id``, plus the normalized title, company, and location."""
+    if not isinstance(job, dict):
+        job = {}
+    return {
+        "source_job_id": linkedin_job_id(job.get("url")),
+        "fallback": (
+            normalize_dedup_text(job.get("title")),
+            normalize_dedup_text(job.get("company")),
+            normalize_dedup_text(job.get("location")),
+        ),
+    }
+
+
+def _normalized_column(column):
+    collapsed = func.regexp_replace(func.btrim(column), r"\s+", " ", "g")
+    return func.lower(collapsed)
+
+
+def existing_source_ids_stmt(ids):
+    """Lookup for LinkedIn job ids that are already stored."""
+    return select(models.JobPosting.source_job_id).where(
+        models.JobPosting.source_job_id.in_(list(ids))
     )
+
+
+def existing_fallback_stmt(triples):
+    """Normalized title, company, and location, plus ``source_job_id`` (null on legacy rows)."""
+    title = _normalized_column(models.JobPosting.title)
+    company = _normalized_column(models.JobPosting.company)
+    location = _normalized_column(models.JobPosting.location)
+    return select(title, company, location, models.JobPosting.source_job_id).where(
+        tuple_(title, company, location).in_(list(triples))
+    )
+
+
+def prepare_posting_records(jobs):
+    """Return ``(records, invalid_count)``. A record needs a title and a company."""
+    records = []
+    invalid = 0
+    for job in jobs:
+        try:
+            job["title"]
+            job["company"]
+        except (KeyError, TypeError) as error:
+            invalid += 1
+            print(f"Failed to process an individual posting: {error}")
+            continue
+        records.append({"job": job, **posting_identity(job)})
+    return records, invalid
+
+
+def select_new_postings(records, existing_ids, legacy_fallbacks, any_fallbacks):
+    """Split ``records`` into ``(fresh, skipped)``.
+
+    A card with a LinkedIn job id is a duplicate when that id is already stored or
+    already in this batch, or when a row with no id has the same normalized title,
+    company, and location. Two different ids are kept, including when the title and
+    company match and the cities differ.
+
+    A card with no id is a duplicate when that fallback triple matches any stored row
+    or any earlier card in this batch. The first card wins.
+    """
+    fresh = []
+    skipped = []
+    seen_ids = set()
+    seen_no_id = set()
+    seen_any = set()
+    for record in records:
+        job_id = record["source_job_id"]
+        fallback = record["fallback"]
+        if job_id:
+            if (
+                job_id in seen_ids
+                or job_id in existing_ids
+                or fallback in seen_no_id
+                or fallback in legacy_fallbacks
+            ):
+                skipped.append(record)
+                continue
+            seen_ids.add(job_id)
+            seen_any.add(fallback)
+            fresh.append(record)
+            continue
+        if fallback in seen_any or fallback in any_fallbacks:
+            skipped.append(record)
+            continue
+        seen_no_id.add(fallback)
+        seen_any.add(fallback)
+        fresh.append(record)
+    return fresh, skipped
+
+
+def _dedup_sets_from_rows(id_rows, fallback_rows):
+    existing_ids = {row[0] for row in id_rows if row and row[0]}
+    legacy = set()
+    any_fb = set()
+    for row in fallback_rows:
+        triple = (row[0], row[1], row[2])
+        any_fb.add(triple)
+        if len(row) > 3 and row[3] is None:
+            legacy.add(triple)
+    return existing_ids, legacy, any_fb
+
+
+async def _read_dedup(db, records):
+    """Load stored ids and fallback triples. Skips a query the batch does not need."""
+    ids = [record["source_job_id"] for record in records if record["source_job_id"]]
+    triples = [record["fallback"] for record in records]
+    id_rows = []
+    fallback_rows = []
+    if ids:
+        result = await db.execute(existing_source_ids_stmt(ids))
+        id_rows = list(result.all())
+    if triples:
+        result = await db.execute(existing_fallback_stmt(triples))
+        fallback_rows = list(result.all())
+    return _dedup_sets_from_rows(id_rows, fallback_rows)
 
 
 def _posting_from(job, keyword, meta, embedding):
@@ -319,6 +486,7 @@ def _posting_from(job, keyword, meta, embedding):
         salary=job.get("salary"),
         search_keyword=keyword,
         embedding=embedding,
+        source_job_id=linkedin_job_id(job.get("url")),
         employment_type=meta.get("employment_type", "Full-time") if isinstance(meta, dict) else "Full-time",
         experience_level=meta.get("experience_level", "Junior") if isinstance(meta, dict) else "Junior",
         skills=", ".join(str(skill) for skill in skills),
@@ -386,12 +554,14 @@ async def _commit_postings(db, specs) -> int:
 
 
 async def store_scraped_jobs(db, jobs, keyword: str) -> int:
-    """Insert scraped jobs whose (title, company) is not already stored.
+    """Insert scraped jobs that are not already stored.
 
-    One SELECT for the whole city, then bounded concurrent metadata and embedding calls
-    for the new jobs only, then one ``add_all`` / commit. The duplicate check includes
-    repeats inside this batch (the first one wins), which is the same rule as inserting
-    one by one. A failure while tagging one job skips that job and does not abort the city.
+    The primary key is the LinkedIn job id on the card URL. A card with no id, and a
+    stored row with no id, fall back to normalized title + company + location. One id
+    lookup and one fallback lookup for the city (either is skipped when the batch does
+    not need it), then bounded concurrent metadata and embedding calls for the new jobs
+    only, then one ``add_all`` / commit. The first card in the batch wins. A failure
+    while tagging one job skips that job and does not abort the city.
     """
     if not QUERY_STATS_ENABLED:
         return await _store_scraped_jobs(db, jobs, keyword)
@@ -406,40 +576,29 @@ async def store_scraped_jobs(db, jobs, keyword: str) -> int:
     return saved
 
 
+def _log_skipped(records):
+    for record in records:
+        job = record["job"]
+        print(f"Skipped (duplicate): {job.get('title')} @ {job.get('company')}")
+
+
 async def _store_scraped_jobs(db, jobs, keyword: str) -> int:
-    seen = set()
-    unique = []
-    for job in jobs:
-        try:
-            pair = (job["title"], job["company"])
-        except (KeyError, TypeError) as error:
-            print(f"Failed to process an individual posting: {error}")
-            continue
-        if pair in seen:
-            print(f"Skipped (duplicate): {pair[0]} @ {pair[1]}")
-            continue
-        seen.add(pair)
-        unique.append(job)
-    if not unique:
+    records, _invalid = prepare_posting_records(jobs)
+    if not records:
         return 0
 
-    result = await db.execute(existing_title_company_stmt(
-        [(job["title"], job["company"]) for job in unique]
-    ))
-    existing = {(title, company) for title, company in result.all()}
+    existing_ids, legacy_fallbacks, any_fallbacks = await _read_dedup(db, records)
     # End the read transaction before the OpenAI calls so this connection is not held
-    # for the whole city. expire_on_commit is False; the pairs above are plain tuples.
+    # for the whole city. expire_on_commit is False; the keys above are plain values.
     await db.commit()
 
-    fresh = []
-    for job in unique:
-        pair = (job["title"], job["company"])
-        if pair in existing:
-            print(f"Skipped (duplicate): {pair[0]} @ {pair[1]}")
-            continue
-        fresh.append(job)
-    if not fresh:
+    fresh_records, skipped = select_new_postings(
+        records, existing_ids, legacy_fallbacks, any_fallbacks
+    )
+    _log_skipped(skipped)
+    if not fresh_records:
         return 0
+    fresh = [record["job"] for record in fresh_records]
 
     outcomes = await asyncio.gather(
         *(_enrich_posting(job) for job in fresh),
@@ -480,12 +639,11 @@ async def _try_once_more(action, progress, retry_step):
         return await action()
 
 
-async def _lookup_existing(pairs):
-    """Return stored (title, company) pairs. The session closes before the caller continues."""
+async def _lookup_dedup(records):
+    """Load dedup keys on a new session. The session closes before the caller continues."""
     async with AsyncSessionLocal() as db:
         try:
-            result = await db.execute(existing_title_company_stmt(pairs))
-            return {(title, company) for title, company in result.all()}
+            return await _read_dedup(db, records)
         except (InterfaceError, DBAPIError):
             await _rollback_quietly(db)
             raise
@@ -506,60 +664,40 @@ async def _insert_postings(specs):
             raise
 
 
-def _unique_jobs(jobs, stats):
-    """Drop in-batch repeats. The first (title, company) wins; later copies are skipped."""
-    seen = set()
-    unique = []
-    for job in jobs:
-        try:
-            pair = (job["title"], job["company"])
-        except (KeyError, TypeError) as error:
-            stats.failed += 1
-            print(f"Failed to process an individual posting: {error}")
-            continue
-        if pair in seen:
-            stats.skipped += 1
-            print(f"Skipped (duplicate): {pair[0]} @ {pair[1]}")
-            continue
-        seen.add(pair)
-        unique.append(job)
-    return unique
-
-
 async def _persist_scraped_jobs(jobs, keyword, stats, progress):
-    """Store one city's cards with one lookup and one commit, on short sessions.
+    """Store one city's cards with one lookup round and one commit, on short sessions.
 
     The lookup session closes before any OpenAI call. The commit uses a new session.
     A closed connection is retried once. Any other batch-commit failure is retried per row,
-    each row on its own session, so one bad row does not drop the city. Repeats inside the
-    batch count as skipped. This replaces inserting one card at a time.
+    each row on its own session, so one bad row does not drop the city. The duplicate key
+    is the LinkedIn job id, then normalized title + company + location. Repeats inside
+    the batch count as skipped.
     """
-    unique = _unique_jobs(jobs, stats)
-    if not unique:
+    records, invalid = prepare_posting_records(jobs)
+    stats.failed += invalid
+    if not records:
         return
 
     progress.note("duplicate check")
     try:
-        existing = await _try_once_more(
-            lambda: _lookup_existing([(job["title"], job["company"]) for job in unique]),
+        existing_ids, legacy_fallbacks, any_fallbacks = await _try_once_more(
+            lambda: _lookup_dedup(records),
             progress,
             "duplicate check retry",
         )
     except Exception as exc:
-        stats.failed += len(unique)
+        stats.failed += len(records)
         print(f"Failed to process an individual posting: {exc}")
         return
 
-    fresh = []
-    for job in unique:
-        pair = (job["title"], job["company"])
-        if pair in existing:
-            stats.skipped += 1
-            print(f"Skipped (duplicate): {pair[0]} @ {pair[1]}")
-            continue
-        fresh.append(job)
-    if not fresh:
+    fresh_records, skipped = select_new_postings(
+        records, existing_ids, legacy_fallbacks, any_fallbacks
+    )
+    stats.skipped += len(skipped)
+    _log_skipped(skipped)
+    if not fresh_records:
         return
+    fresh = [record["job"] for record in fresh_records]
 
     outcomes = await asyncio.gather(
         *(_enrich_posting(job, progress) for job in fresh),
@@ -673,9 +811,11 @@ async def _run_crawl(totals, progress):
 async def scheduled_north_america_crawl():
     """Crawl LinkedIn for every North American hub, tag new postings, and store them.
 
-    Runs on a schedule. Postings that already exist (same title and company) are skipped.
-    Each city is one batch: one duplicate-check query and one insert commit, each on its
-    own session, closed before the next OpenAI call and before the next city. A failure on
+    Runs on a schedule. A posting is skipped when its LinkedIn job id is already stored.
+    A card with no id, and a stored row with no id, fall back to normalized title,
+    company, and location. Each city is one batch: the duplicate-check queries and the
+    insert commit each use their own session, closed before the next OpenAI call and
+    before the next city. A failure on
     one posting does not stop the rest of that city. The whole job has a deadline, and each
     city has one, so this function returns even when one await does not.
     """
@@ -798,8 +938,10 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.run_sync(models.Base.metadata.create_all)
-            # Existing databases already have job_postings, so create_all will not add the
-            # HNSW index. CREATE INDEX IF NOT EXISTS is a no-op when the index is already there.
+            # Existing databases already have job_postings, so create_all will not add
+            # source_job_id or the HNSW index. Both statements are no-ops when present.
+            await conn.execute(text(SOURCE_JOB_ID_COLUMN_SQL))
+            await conn.execute(text(SOURCE_JOB_ID_INDEX_SQL))
             await conn.execute(text(HNSW_INDEX_SQL))
             version = None
             version_result = await conn.execute(

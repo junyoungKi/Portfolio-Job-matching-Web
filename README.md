@@ -60,7 +60,7 @@ Scheduled pipeline (APScheduler, runs inside the FastAPI process):
 ```mermaid
 flowchart LR
     S1[Every 6 hours<br/>first run 5s after startup] --> C[Playwright: LinkedIn search + detail pages<br/>8 North American cities]
-    C --> D{Same title and company<br/>already stored?}
+    C --> D{Same LinkedIn job id,<br/>or legacy title + company + location?}
     D -->|yes| X[Skip]
     D -->|no| T[gpt-4o-mini: type, level, top skills<br/>+ embedding]
     T --> DB[(PostgreSQL + pgvector)]
@@ -298,7 +298,7 @@ One crawl run never finished. The exact blocking point is unknown (Playwright, O
 
 Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say the posting count has recovered, and it does not say the code change below is verified in production.
 
-PR #19, once merged and deployed, changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup is still title + company.
+PR #19, once merged and deployed, changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup uses the LinkedIn job id on the card URL when that id is present. Rows stored before `source_job_id` existed, and cards whose URL has no id, fall back to normalized title, company, and location.
 
 After a deploy, on the server:
 
@@ -315,7 +315,7 @@ Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N card
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.
 - Uploaded resumes and their match analyses are deleted after 1 hour. The 30-day cleanup applies to crawled postings only.
 - The crawler searches only for "Software Engineer" in 8 cities and reads one result page (25 cards) per city per run. Matching uses the resume embedding, location, and the level, type, and skill filters.
-- De-duplication matches on exact title and company, so the same role in two cities counts as one posting.
+- De-duplication uses the LinkedIn job id from the card URL. The same title at the same company in another city is stored when the ids differ. A card with no id, or a row stored with no id, falls back to normalized title, company, and location.
 - Salary is not collected: every crawled posting is stored with the placeholder "Competitive Salary".
 - Scraping LinkedIn can be blocked or break when its HTML changes, and may conflict with its terms of use.
 - PDF only; scanned PDFs without a text layer produce no usable text.

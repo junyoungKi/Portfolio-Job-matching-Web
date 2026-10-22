@@ -28,6 +28,9 @@ class JobPosting(Base):
     location = Column(String, index=True)
     salary = Column(String)
     search_keyword = Column(String)
+    # LinkedIn job id parsed from the card URL. Null for USER_UPLOAD rows, for cards
+    # whose URL had no id, and for crawled rows stored before this column existed.
+    source_job_id = Column(String, index=True)
     embedding = Column(Vector(1536)) 
     
     # Filtering columns

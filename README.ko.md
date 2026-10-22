@@ -294,9 +294,9 @@ Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], nex
 
 크롤 한 번이 끝나지 않았습니다. 어디서 멈췄는지는 알 수 없습니다 (Playwright, OpenAI, 또는 DB 대기). `max_instances`가 1이라, 그 실행이 살아 있는 동안 6시간마다의 다음 실행은 모두 건너뛰어졌습니다.
 
-당장 취한 조치는 `docker-compose restart web`입니다. 멈추지 않던 프로세스가 종료되었습니다. 크롤은 `2026-10-22 04:18 UTC`에 다시 시작되었습니다. 공고 수가 회복되었다는 뜻은 아니고, 아래 코드 변경이 프로덕션에서 확인되었다는 뜻도 아닙니다.
+당장 취한 조치는 `docker-compose restart web`입니다. 멈추지 않던 프로세스가 종료되었습니다. 크롤은 `2026-10-22 04:18 UTC`에 다시 시작되었습니다. 공고 총수가 얼마인지는 말하지 않습니다.
 
-PR #19가 `main`에 병합되어 배포되면 크롤은 이렇게 바뀝니다. 도시마다 제한 시간이 있습니다 (`CRAWL_CITY_TIMEOUT_SECONDS`, 기본 1200). 한 번 전체 실행에도 6시간 간격보다 짧은 제한이 있습니다 (`CRAWL_JOB_TIMEOUT_SECONDS`, 기본 18000). Playwright의 실행, 페이지 이동, 종료와 OpenAI 클라이언트에 각각 제한 시간이 있습니다. 브라우저는 `finally`에서 닫습니다. `EPIPE` 같은 드라이버 오류는 그 도시를 끝내고 다음 도시는 계속합니다. 중복 확인과 커밋은 각각 짧은 세션을 엽니다. 풀은 `pool_pre_ping`과 `pool_recycle`(기본 1800초)을 사용합니다. 느린 await 직전에는 `[BATCH] Step {city} ({keyword}): {step}`을 찍습니다. 도시마다 수집, 저장, 중복 건너뜀, 실패 수를 찍습니다. 제한 시간을 넘기면 마지막 단계가 적힌 `[BATCH] Watchdog` 한 줄이 남습니다. 크롤 작업은 `coalesce=True`입니다 (`max_instances`는 1 유지). 중복 판별은 카드 URL에 LinkedIn 공고 id가 있으면 그 id를 씁니다. `source_job_id`가 생기기 전에 저장된 행과, URL에 id가 없는 카드는 정규화한 제목, 회사, 지역으로 비교합니다.
+PR #19는 배포되어 있습니다. 크롤은 이렇게 바뀝니다. 도시마다 제한 시간이 있습니다 (`CRAWL_CITY_TIMEOUT_SECONDS`, 기본 1200). 한 번 전체 실행에도 6시간 간격보다 짧은 제한이 있습니다 (`CRAWL_JOB_TIMEOUT_SECONDS`, 기본 18000). Playwright의 실행, 페이지 이동, 종료와 OpenAI 클라이언트에 각각 제한 시간이 있습니다. 브라우저는 `finally`에서 닫습니다. `EPIPE` 같은 드라이버 오류는 그 도시를 끝내고 다음 도시는 계속합니다. 중복 확인과 커밋은 각각 짧은 세션을 엽니다. 풀은 `pool_pre_ping`과 `pool_recycle`(기본 1800초)을 사용합니다. 느린 await 직전에는 `[BATCH] Step {city} ({keyword}): {step}`을 찍습니다. 도시마다 수집, 저장, 중복 건너뜀, 실패 수를 찍습니다. 제한 시간을 넘기면 마지막 단계가 적힌 `[BATCH] Watchdog` 한 줄이 남습니다. 크롤 작업은 `coalesce=True`입니다 (`max_instances`는 1 유지). 중복 판별은 카드 URL에 LinkedIn 공고 id가 있으면 그 id를 씁니다. `source_job_id`가 생기기 전에 저장된 행과, URL에 id가 없는 카드는 정규화한 제목, 회사, 지역으로 비교합니다.
 
 배포 후 서버에서:
 
@@ -306,42 +306,41 @@ docker-compose logs --tail=500 web | grep '\[BATCH\]'
 docker-compose logs --tail=200 web | grep 'maximum number of running instances'
 ```
 
-`[BATCH] Starting` 다음에 `[BATCH] Step`이 나오고, 도시마다 `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` 한 줄이 나온 뒤 `[BATCH] Finished`가 나와야 합니다. 그 프로세스의 로그에 skip 줄이 있으면 안 됩니다.
+`[BATCH] Starting` 다음에 `[BATCH] Step`이 나오고, 도시마다 `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` 한 줄이 나온 뒤 `[BATCH] Finished`가 나와야 합니다. 그 프로세스의 로그에 `maximum number of running instances` skip 줄이 있으면 안 됩니다.
+
+05:06 UTC 배포는 `[BATCH] Starting`과 `[BATCH] Step`을 찍었습니다. 그 프로세스가 05:12:53 UTC에 종료되기 전에 도시 완료 줄과 `[BATCH] Finished`는 보이지 않았습니다. 크롤 한 번이 끝까지 돌았다는 뜻은 아닙니다.
 
 ## 문제 해결: web 프로세스가 OpenSSL 안에서 SIGSEGV
 
-이 사건은 위의 멈춘 크롤과 별개입니다. 10월 17일의 멈춤이 segfault였다는 증거는 아니고, 메모리 부족으로 죽은 것이라는 증거도 아닙니다.
-
-2026-10-22에 `web` 컨테이너는 `2026-10-22T05:06:11Z`에 시작했습니다. 크롤 로그는 05:06:20에 실행이 시작되어 Vancouver 상세 페이지에 있었습니다. 05:12:53에 호스트 커널이 부팅 이후 유일한 segfault를 기록했습니다.
+2026-10-22 05:12:53 UTC에 `web` 컨테이너가 종료 코드 139(SIGSEGV)로 끝났습니다. `OOMKilled`는 false였습니다. 호스트 커널에는 부팅 이후 segfault가 한 줄뿐이었고, 메인 스레드가 아닌 스레드의 `libcrypto.so.3`를 가리켰습니다.
 
 ```text
 [Thu Oct 22 05:12:53 2026] uvicorn[576578]: segfault at 8 ip 00007121c9b35b6d sp 000071219cff84d0 error 4 in libcrypto.so.3[3ecb6d,7121c9840000+384000] likely on CPU 1
 ```
 
-`web_1`의 `docker inspect`는 종료 코드 139(128 + SIGSEGV), `OOMKilled` false, `RestartCount` 0, 컨테이너는 실행 중이 아니었습니다. 호스트 SSH는 계속 됐습니다. Redis와 Caddy는 살아 있어서, 프록시 뒤에 `web`이 없어 사이트가 오류를 반환했습니다. `error 4`는 사용자 공간 읽기입니다. 주소 8은 널 포인터에 작은 필드 오프셋을 더한 값입니다. 그 명령은 시스템 OpenSSL 3 라이브러리 `libcrypto.so.3` 안에 있습니다. 스택 포인터는 메인 스택이 아니라 스레드 스택에 있으므로, 고장난 스레드는 메인 스레드가 아닙니다. Chromium은 다른 프로세스이고, 이 줄은 `uvicorn` 프로세스입니다.
+호스트는 떠 있었습니다 (SSH가 됐습니다). Caddy와 Redis도 떠 있었습니다. 사이트가 내려간 이유는 `web`을 다시 시작하는 것이 없었기 때문입니다. `RestartCount`는 0이었고, compose에 restart 정책이 없었습니다. 지금까지 한 번입니다. 일회성일 수 있습니다.
 
-플러시된 `web` 로그의 마지막은 Vancouver의 `duplicate check` 단계와 약 40줄의 `Skipped (duplicate)`였고, `Collected ...` 요약과 Python traceback은 없었습니다. 이 코드에서 단계 줄은 조회 전에 찍히고, `Skipped (duplicate)`는 그 조회가 반환된 뒤에만 찍힙니다. 단계 줄에는 키워드도 포함됩니다. `[BATCH] Step Vancouver, BC (Software Engineer): duplicate check`. 이미지에 `PYTHONUNBUFFERED`가 없었고 Compose는 TTY를 붙이지 않으므로 Python은 stdout을 블록 버퍼링합니다. SIGSEGV는 그 버퍼를 버립니다. 이 줄들은 `docker logs`에 도달한 마지막 줄이지, 프로세스가 찍은 마지막 줄이라는 뜻은 아닙니다.
+복구는 호스트의 저장소 디렉터리에서 `docker-compose up -d`를 실행한 것입니다. Compose는 `Starting ..._web_1 ... done`을 출력하고 멈춰 있던 컨테이너를 시작했습니다. 호스트를 재부팅하지 않았고 `docker-compose down`도 하지 않았습니다. 사이트가 돌아왔습니다. 크롤은 5초 뒤에 다시 시작했습니다.
 
-04:42 배포는 PR #19만이었고 이 고장은 나지 않았습니다. 05:05 배포가 PR #18과 PR #21을 더했습니다. pip 레이어가 캐시되어 두 배포 사이에 설치된 Python 패키지는 바뀌지 않았습니다. `Dockerfile`은 다이제스트 없는 `python:3.11-slim`입니다. `requirements.txt`는 버전을 고정하지 않습니다. 저장소에는 이미지 다이제스트나 Debian OpenSSL 패치 수준이 없습니다. 인스턴스 사양은 여기 없습니다 (위의 `TODO(owner)`).
-
-코드에서 확인된 것: RDS는 asyncpg의 `ssl=require`로 붙고, 이는 Python `ssl`을 씁니다. OpenAI는 `AsyncOpenAI`(httpx TLS)이고 역시 Python `ssl`입니다. `hashlib.md5`(이력서 해시와 `/match` 캐시 키)는 `_hashlib`을 씁니다. 이 셋이 시스템 `libcrypto.so.3`로 들어갑니다. uvloop, asyncpg 자체 확장, httptools는 `libcrypto`에 링크되어 있지 않습니다. `app/`에서 `run_in_executor`는 `app/services/parser.py`의 PDF 파싱뿐입니다. 그 PyMuPDF 확장은 시스템 `libcrypto`에 링크되어 있지 않습니다. 크롤은 `asyncio.to_thread`를 호출하지 않습니다. `asyncio.gather`는 코루틴을 이벤트 루프 스레드에서 실행합니다. TCP keepalive 훅은 `setsockopt`만 호출합니다. 그 훅은 04:42 프로세스에 이미 있었습니다.
-
-#18/#21이 TLS와 맞닿게 바꾼 점: 크롤러가 메타데이터와 임베딩 호출을 함께 실행하고, 동시에 최대 `LLM_MAX_CONCURRENCY`(8)개입니다. #19는 OpenAI 호출을 한 번에 하나씩 했습니다. `/match`도 한국어와 영어 분석을 같은 방식으로 함께 실행합니다. OpenSSL을 다르게 쓰는 변화로는 이것이 가장 가깝습니다. 그래도 메인 스레드가 아닌 스레드의 고장을 그 자체로 설명하지는 않으며, 이 저장소에서 크래시를 재현하지 못했습니다. 근본 원인은 단정하지 않습니다.
-
-서버에서 커널 줄을 읽으려면:
+다음번에는 그 디렉터리에서:
 
 ```bash
+docker ps -a
+docker inspect --format 'exit={{.State.ExitCode}} oom={{.State.OOMKilled}} status={{.State.Status}} restarts={{.RestartCount}}' $(docker-compose ps -q -a web)
 sudo dmesg -T | grep -i segfault
 ```
 
-`web`, `redis`, `caddy`는 `restart: unless-stopped`입니다. 이후 크래시가 나도 사이트를 꺼진 채로 두지 않고 컨테이너를 다시 시작합니다. 앱을 import하면 모든 스레드에 `faulthandler`가 켜지고, 다음 치명 신호에서 Python traceback을 stderr에 씁니다. stdout은 버퍼링하지 않습니다 (`PYTHONUNBUFFERED=1`).
+`docker-compose` 1.29.2의 `logs`에는 `--since`가 없습니다. 멈춘 컨테이너는 이렇게 다시 시작합니다.
 
-스위치 둘은 서버 `.env`에 넣기 전에는 이전 동작을 유지합니다 (그다음 `web`을 다시 만듭니다. `docker-compose down -v`는 쓰지 마세요).
+```bash
+docker-compose up -d
+```
 
-- `UVICORN_LOOP=asyncio`는 uvicorn을 `--loop asyncio`로 시작합니다. 기본값은 `uvloop`입니다.
-- `DB_TCP_KEEPALIVE=0`은 연결 시 keepalive `setsockopt`를 건너뜁니다. 기본값은 켜짐입니다.
+`docker-compose down`과 `docker-compose down -v`는 쓰지 마세요. `up -d`는 멈춘 것을 시작하고, Redis와 `deploy/certs`는 그대로 둡니다.
 
-segfault가 다시 나면 먼저 `UVICORN_LOOP=asyncio`를 시도하고, 그래도 반복되면 `DB_TCP_KEEPALIVE=0`을 시도합니다. 둘 다 확인된 수정은 아닙니다.
+PR #23은 `docker-compose.yml`의 `web`, `redis`, `caddy`에 `restart: unless-stopped`를 넣습니다. 호스트가 그 파일을 실행하게 되면, Docker는 운영자가 멈추지 않은 한 크래시를 포함한 어떤 종료 뒤에든 컨테이너를 다시 시작합니다. #23은 import 때 `faulthandler`도 켭니다. 다음 치명 신호에서 모든 스레드의 Python traceback이 stderr에 남습니다. `PYTHONUNBUFFERED=1`로 stdout을 블록 버퍼링하지 않습니다. 스위치 둘은 서버 `.env`에 넣기 전에는 이전 동작을 유지합니다. `UVICORN_LOOP=asyncio`(기본값은 `uvloop`, 값은 `--loop`로 전달)와 `DB_TCP_KEEPALIVE=0`(기본값은 켜짐, `0`이면 keepalive `setsockopt`를 건너뜀)입니다. PR #24는 Dockerfile `CMD`를 고칩니다. 셸 형식의 달러 기호를 두 번 쓴 값이 `sh`에 셸 PID로 전달되어 `--loop`가 깨질 수 있었습니다. 고친 명령은 exec 형식의 `sh -c`라서, 컨테이너가 시작될 때 변수가 펼쳐집니다.
+
+확인되지 않은 것: 근본 원인은 모릅니다. restart 정책은 실제 크래시로 아직 동작한 적이 없습니다. `UVICORN_LOOP`와 `DB_TCP_KEEPALIVE`는 증명된 수정이 아닙니다.
 
 ## 한계
 

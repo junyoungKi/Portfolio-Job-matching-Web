@@ -296,9 +296,9 @@ Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], nex
 
 One crawl run never finished. The exact blocking point is unknown (Playwright, OpenAI, or a database wait). `max_instances` is 1, so every later 6-hour tick was skipped while that run was still the running instance.
 
-Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say the posting count has recovered, and it does not say the code change below is verified in production.
+Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say what the posting count totals.
 
-PR #19, once merged and deployed, changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup uses the LinkedIn job id on the card URL when that id is present. Rows stored before `source_job_id` existed, and cards whose URL has no id, fall back to normalized title, company, and location.
+PR #19 is deployed. It changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup uses the LinkedIn job id on the card URL when that id is present. Rows stored before `source_job_id` existed, and cards whose URL has no id, fall back to normalized title, company, and location.
 
 After a deploy, on the server:
 
@@ -308,42 +308,41 @@ docker-compose logs --tail=500 web | grep '\[BATCH\]'
 docker-compose logs --tail=200 web | grep 'maximum number of running instances'
 ```
 
-Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The skip line should not appear for that process.
+Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The `maximum number of running instances` skip line should not appear for that process.
+
+The 05:06 UTC deploy printed `[BATCH] Starting` and `[BATCH] Step` lines. No per-city completion line and no `[BATCH] Finished` were observed before that process exited at 05:12:53 UTC. That is not a completed crawl.
 
 ## Troubleshooting: web process segfaulted in OpenSSL
 
-This is a separate event from the stuck crawl above. It is not evidence that the October 17 hang was a segfault, and it is not evidence of an out-of-memory kill.
-
-On 2026-10-22 the `web` container started at `2026-10-22T05:06:11Z`. The crawl log shows the run starting at 05:06:20, on Vancouver's detail pages. At 05:12:53 the host kernel recorded the only segfault since boot:
+On 2026-10-22 at 05:12:53 UTC the `web` container exited with code 139 (SIGSEGV). `OOMKilled` was false. The host kernel had one segfault line since boot. It named `libcrypto.so.3` on a non-main thread:
 
 ```text
 [Thu Oct 22 05:12:53 2026] uvicorn[576578]: segfault at 8 ip 00007121c9b35b6d sp 000071219cff84d0 error 4 in libcrypto.so.3[3ecb6d,7121c9840000+384000] likely on CPU 1
 ```
 
-`docker inspect` on `web_1` showed exit code 139 (128 + SIGSEGV), `OOMKilled` false, `RestartCount` 0, and the container not running. SSH to the host still worked. Redis and Caddy stayed up, so the site returned errors because the proxy had no `web` backend. `error 4` is a user-space read. Address 8 is a null pointer plus a small field offset. The instruction is inside the system OpenSSL 3 library `libcrypto.so.3`. The stack pointer is on a thread stack, not the main stack, so the faulting thread was not the main thread. Chromium is a different process; this line is the `uvicorn` process.
+The host stayed up (SSH still worked). Caddy and Redis stayed up. The site was down because nothing restarted `web`: `RestartCount` was 0, and compose had no restart policy. One occurrence so far. It may be a one-off.
 
-The last flushed `web` logs were the Vancouver step `duplicate check`, then about 40 `Skipped (duplicate)` lines, with no `Collected ...` summary and no Python traceback. In this code the step line is printed before the lookup, and `Skipped (duplicate)` is printed only after that lookup returns. The code's step line also includes the keyword: `[BATCH] Step Vancouver, BC (Software Engineer): duplicate check`. The image did not set `PYTHONUNBUFFERED`, and Compose does not allocate a TTY, so Python block-buffers stdout. A SIGSEGV discards that buffer. Those lines are the last lines that reached `docker logs`, not proof they were the last lines the process printed.
+Recovery was on the host, from the repo directory: `docker-compose up -d`. Compose printed `Starting ..._web_1 ... done` and started the stopped container. There was no host reboot and no `docker-compose down`. The site came back. The crawl started again 5 seconds later.
 
-The 04:42 deploy was PR #19 only and did not hit this fault. The 05:05 deploy added PR #18 and PR #21. The pip layer was cached, so the installed Python packages did not change between those two deploys. `Dockerfile` is `python:3.11-slim` with no digest. `requirements.txt` does not pin versions. The repo does not record the image digest or the Debian OpenSSL patch level. Instance size is not recorded here (`TODO(owner)` above).
-
-What is proven about the code: RDS is reached with `ssl=require` through asyncpg, which uses Python's `ssl` module. OpenAI is `AsyncOpenAI` (httpx over TLS), also Python's `ssl`. `hashlib.md5` (the resume hash and the `/match` cache key) uses `_hashlib`. Those three enter system `libcrypto.so.3`. uvloop, asyncpg's own extension, and httptools do not link `libcrypto`. The only `run_in_executor` in `app/` is PDF parsing in `app/services/parser.py`. That PyMuPDF extension is not linked to system `libcrypto`. The crawl does not call `asyncio.to_thread`. `asyncio.gather` runs coroutines on the event-loop thread. The TCP keepalive hook only calls `setsockopt`. It was already in the 04:42 process.
-
-What #18/#21 changed that touches TLS: the crawler now runs metadata and embedding calls together, up to `LLM_MAX_CONCURRENCY` (8) at once. #19 did one OpenAI call at a time. `/match` now runs the Korean and English analyses together the same way. That is the behavior change most likely to exercise OpenSSL differently. It still does not by itself explain a fault on a non-main thread, and this repository has not reproduced the crash. No root cause is claimed.
-
-Read the kernel line on the server:
+Next time, from that directory:
 
 ```bash
+docker ps -a
+docker inspect --format 'exit={{.State.ExitCode}} oom={{.State.OOMKilled}} status={{.State.Status}} restarts={{.RestartCount}}' $(docker-compose ps -q -a web)
 sudo dmesg -T | grep -i segfault
 ```
 
-`web`, `redis`, and `caddy` use `restart: unless-stopped`, so a later crash starts the container again instead of leaving the site down. Importing the app enables `faulthandler` for every thread, which writes Python tracebacks to stderr on the next fatal signal. Stdout is unbuffered (`PYTHONUNBUFFERED=1`).
+`docker-compose` 1.29.2 has no `--since` on `logs`. Start the stopped container again with:
 
-Two switches keep today's behavior unless set in the server `.env` (then recreate `web`; do not `docker-compose down -v`):
+```bash
+docker-compose up -d
+```
 
-- `UVICORN_LOOP=asyncio` starts uvicorn with `--loop asyncio`. The default is `uvloop`.
-- `DB_TCP_KEEPALIVE=0` skips the connect-time keepalive `setsockopt`. The default is on.
+Do not run `docker-compose down` or `docker-compose down -v`. `up -d` starts what is stopped and leaves Redis and `deploy/certs` in place.
 
-Try `UVICORN_LOOP=asyncio` first if the segfault returns, then `DB_TCP_KEEPALIVE=0` if it still returns. Neither switch is an identified fix.
+PR #23 sets `restart: unless-stopped` on `web`, `redis`, and `caddy` in `docker-compose.yml`. Once the host is running that file, Docker starts the container again after any exit, including a crash, unless an operator stopped it. #23 also turns on `faulthandler` at import, so the next fatal signal writes a Python traceback for every thread to stderr, and sets `PYTHONUNBUFFERED=1` so stdout is not block-buffered. Two switches keep the previous behavior unless they are set in the server `.env`: `UVICORN_LOOP=asyncio` (the default is `uvloop`; the value is passed as `--loop`) and `DB_TCP_KEEPALIVE=0` (the default is on; `0` skips the keepalive `setsockopt`). PR #24 fixes the Dockerfile `CMD`. A doubled dollar sign in the shell form reached `sh` as the shell PID and would have broken `--loop`. The corrected command is exec-form `sh -c`, so the variable expands when the container starts.
+
+Not verified: the root cause is unknown. The restart policy has not yet been exercised by a real crash. `UVICORN_LOOP` and `DB_TCP_KEEPALIVE` are not proven fixes.
 
 ## Limitations
 

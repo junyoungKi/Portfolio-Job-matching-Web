@@ -344,6 +344,20 @@ PR #23 sets `restart: unless-stopped` on `web`, `redis`, and `caddy` in `docker-
 
 Not verified: the root cause is unknown. The restart policy has not yet been exercised by a real crash. `UVICORN_LOOP` and `DB_TCP_KEEPALIVE` are not proven fixes.
 
+## Troubleshooting: deploys of #23 and #24 left the site down
+
+This is separate from the segfault above. The root cause of that segfault is still unknown.
+
+The GitHub Actions Deploy runs for PR #23 (commit `ea74e44`, run `39727758001`, 2026-10-22 05:23 UTC) and PR #24 (run `39728690261`) both failed, and the site did not come back. Both died at `Recreating ..._redis_1` with docker-compose 1.29.2 `KeyError: 'ContainerConfig'`. That is a compose v1 bug on recreating an existing container. The logs are `gh run view 39727758001 --log-failed` and `gh run view 39728690261 --log-failed`.
+
+PR #23 added `restart: unless-stopped` to the redis service. That changes redis's config hash, so `docker-compose up -d` tried to recreate redis. `deploy/lightsail.sh` removes only `web` and `caddy` before `up`, so redis was the container compose tried to recreate, and it hit the bug. A failed recreate stops and renames redis. The #24 log shows `80209f74697e_portfolio-job-matching-web_redis_1`. `web` and `caddy` had already been removed by the script, and `up` never recreated them, so the site stayed down. The runs never reached starting `web`.
+
+A compose-config change on redis will do this again unless `deploy/lightsail.sh` removes the redis container before `up`. Do not use `docker-compose down`.
+
+Separate latent bug, found and fixed in PR #24, and not the cause of these failures: the #23 Dockerfile `CMD` was `--loop "$${UVICORN_LOOP:-uvloop}"`. `$$` is a `docker-compose.yml` escape. In a Dockerfile it reaches `sh` as the shell PID, so uvicorn would have been given an invalid `--loop`. PR #24 (merged) uses `sh -c "exec uvicorn ... --loop ${UVICORN_LOOP:-uvloop}"`. The deploys never got as far as starting that command.
+
+Server recovery: pending. Not yet confirmed on the server.
+
 ## Limitations
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.

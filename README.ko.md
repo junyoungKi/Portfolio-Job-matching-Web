@@ -342,6 +342,20 @@ PR #23은 `docker-compose.yml`의 `web`, `redis`, `caddy`에 `restart: unless-st
 
 확인되지 않은 것: 근본 원인은 모릅니다. restart 정책은 실제 크래시로 아직 동작한 적이 없습니다. `UVICORN_LOOP`와 `DB_TCP_KEEPALIVE`는 증명된 수정이 아닙니다.
 
+## 문제 해결: #23과 #24 배포가 사이트를 내려 둠
+
+위의 segfault와는 별개입니다. 그 segfault의 근본 원인은 아직 모릅니다.
+
+PR #23(커밋 `ea74e44`, Actions run `39727758001`, 2026-10-22 05:23 UTC)과 PR #24(Actions run `39728690261`)의 GitHub Actions Deploy가 둘 다 실패했고, 사이트가 돌아오지 않았습니다. 둘 다 `Recreating ..._redis_1`에서 docker-compose 1.29.2의 `KeyError: 'ContainerConfig'`로 끝났습니다. 이미 있는 컨테이너를 다시 만들 때 나는 compose v1 버그입니다. 로그는 `gh run view 39727758001 --log-failed`와 `gh run view 39728690261 --log-failed`입니다.
+
+PR #23이 redis 서비스에 `restart: unless-stopped`를 넣었습니다. 그 변경은 redis의 config hash를 바꾸므로 `docker-compose up -d`가 redis를 다시 만들려 했습니다. `deploy/lightsail.sh`는 `up` 전에 `web`과 `caddy`만 지우므로, compose가 다시 만들려던 컨테이너는 redis였고 그 버그에 걸렸습니다. 실패한 recreate는 redis를 멈추고 이름을 바꿉니다. #24 로그에는 `80209f74697e_portfolio-job-matching-web_redis_1`가 있습니다. 스크립트가 `web`과 `caddy`를 이미 지운 뒤였고, `up`은 둘을 다시 만들지 못했으므로 사이트가 내려간 채로 남았습니다. 배포는 `web`을 시작하는 단계까지 가지 못했습니다.
+
+redis의 compose 설정이 이후에 또 바뀌면, `deploy/lightsail.sh`가 `up` 전에 redis 컨테이너를 지우지 않는 한 같은 KeyError가 반복됩니다. `docker-compose down`은 쓰지 않습니다.
+
+별개로, PR #24에서 찾아 고친 잠재 버그이며 이번 배포 실패의 원인은 아닙니다. #23 Dockerfile `CMD`는 `--loop "$${UVICORN_LOOP:-uvloop}"`였습니다. `$$`는 `docker-compose.yml`의 이스케이프이고, Dockerfile에서는 `sh`에 셸 PID로 전달되어 uvicorn이 잘못된 `--loop`를 받을 수 있었습니다. 병합된 PR #24는 `sh -c "exec uvicorn ... --loop ${UVICORN_LOOP:-uvloop}"`를 씁니다. 배포는 그 명령을 실행하는 단계까지 가지 못했습니다.
+
+서버 복구: 대기. 서버에서 아직 확인되지 않았습니다.
+
 ## 한계
 
 - 인증이 없습니다. 이력서 전문이 저장되고, `/match/{id}`는 순차 정수 id를 쓰며, CORS는 모든 출처를 허용합니다. 민감한 이력서는 올리지 마세요.

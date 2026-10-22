@@ -8,20 +8,13 @@ Creates the asynchronous SQLAlchemy engine (PostgreSQL via asyncpg), the async s
 the declarative ``Base`` shared by all models, and the ``get_db`` FastAPI dependency.
 """
 import os
-<<<<<<< HEAD
-=======
 import socket
->>>>>>> d845446a958fe9a94dea5d5784c92e09d6c7bf54
 import time
 from contextvars import ContextVar
 
 from dotenv import load_dotenv
 from sqlalchemy import event
-<<<<<<< HEAD
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-=======
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
->>>>>>> d845446a958fe9a94dea5d5784c92e09d6c7bf54
 from sqlalchemy.orm import declarative_base
 
 load_dotenv()

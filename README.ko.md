@@ -345,7 +345,7 @@ PR #23은 `docker-compose.yml`의 `web`, `redis`, `caddy`에 `restart: unless-st
 
 확인되지 않은 것: 근본 원인은 모릅니다. restart 정책은 실제 크래시로 아직 동작한 적이 없습니다. `UVICORN_LOOP`와 `DB_TCP_KEEPALIVE`는 증명된 수정이 아닙니다.
 
-## 문제 해결: #23과 #24 배포가 사이트를 내려 둠
+## 문제 해결: #23, #24, #27 배포가 사이트를 내려 둠
 
 위의 segfault와는 별개입니다. 그 segfault의 근본 원인은 아직 모릅니다.
 
@@ -357,7 +357,11 @@ redis의 compose 설정이 이후에 또 바뀌면, `deploy/lightsail.sh`가 `up
 
 별개로, PR #24에서 찾아 고친 잠재 버그이며 이번 배포 실패의 원인은 아닙니다. #23 Dockerfile `CMD`는 `--loop "$${UVICORN_LOOP:-uvloop}"`였습니다. `$$`는 `docker-compose.yml`의 이스케이프이고, Dockerfile에서는 `sh`에 셸 PID로 전달되어 uvicorn이 잘못된 `--loop`를 받을 수 있었습니다. 병합된 PR #24는 `sh -c "exec uvicorn ... --loop ${UVICORN_LOOP:-uvloop}"`를 씁니다. 배포는 그 명령을 실행하는 단계까지 가지 못했습니다.
 
-서버 복구: 대기. 서버에서 아직 확인되지 않았습니다.
+첫 수정 시도들도 각각 다른 이유로 실패했습니다. PR #26(`up` 전에 redis도 함께 제거)은 11초 만에 실패했습니다. 워크플로가 `bash -s < deploy/lightsail.sh`로 실행하면 `BASH_SOURCE`가 비어 있는데, 스크립트의 "직접 실행될 때만 실행" 가드가 `set -u` 아래에서 `BASH_SOURCE[0]: unbound variable`을 냈습니다. PR #27이 가드를 고쳤지만 그 배포는 다시 실패했습니다. `docker-compose ps -q`는 64자리 컨테이너 id를, `docker ps -aq`는 12자리 id를 출력해서 같은 컨테이너가 `docker rm -f`에 두 번 전달되었고, 두 번째 호출이 "removal ... already in progress"로 실패했으며, `set -e`가 제거 이후 `up -d` 이전에 스크립트를 끝냈습니다. 서버에서 `docker-compose up -d`를 직접 실행할 때까지 사이트는 내려가 있었습니다.
+
+PR #28은 `docker ps -aq --no-trunc`로 id를 통일해 중복을 없애고, 컨테이너를 하나씩 지우며 이미 사라지는 중인 것은 넘기고, 남은 것이 없는지 확인합니다. `deploy/test_lightsail_e2e.sh`는 64/12자리 id와 compose v1 `ContainerConfig` 실패를 흉내 낸 가짜 `docker`/`docker-compose`로 스크립트를 `bash -s`로 실행합니다. #27 스크립트에서는 실패하고 #28 스크립트에서는 통과합니다. #28 Deploy run(`39731429575`, 2026-10-22 06:02 UTC)은 Lightsail 호스트에서 성공했습니다. 기존 컨테이너가 지워지고 redis, web, caddy가 생성되었으며 세 번째 헬스 체크에서 `/stats`가 200을 반환했습니다.
+
+서버 복구: 자동 배포가 이제 동작합니다(run `39731429575`). #23, #24, #27 배포가 실패한 뒤에는 사이트를 되살리려고 서버에서 `docker-compose up -d`를 직접 실행해야 했습니다.
 
 ## 한계
 

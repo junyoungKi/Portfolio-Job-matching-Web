@@ -347,7 +347,7 @@ PR #23 sets `restart: unless-stopped` on `web`, `redis`, and `caddy` in `docker-
 
 Not verified: the root cause is unknown. The restart policy has not yet been exercised by a real crash. `UVICORN_LOOP` and `DB_TCP_KEEPALIVE` are not proven fixes.
 
-## Troubleshooting: deploys of #23 and #24 left the site down
+## Troubleshooting: deploys of #23, #24, and #27 left the site down
 
 This is separate from the segfault above. The root cause of that segfault is still unknown.
 
@@ -359,7 +359,11 @@ A compose-config change on redis will do this again unless `deploy/lightsail.sh`
 
 Separate latent bug, found and fixed in PR #24, and not the cause of these failures: the #23 Dockerfile `CMD` was `--loop "$${UVICORN_LOOP:-uvloop}"`. `$$` is a `docker-compose.yml` escape. In a Dockerfile it reaches `sh` as the shell PID, so uvicorn would have been given an invalid `--loop`. PR #24 (merged) uses `sh -c "exec uvicorn ... --loop ${UVICORN_LOOP:-uvloop}"`. The deploys never got as far as starting that command.
 
-Server recovery: pending. Not yet confirmed on the server.
+The first fix attempts failed too, each for a different reason. PR #26 (remove redis as well before `up`) failed in 11 s: the workflow runs `bash -s < deploy/lightsail.sh`, where `BASH_SOURCE` is empty, and the script's "run only when executed directly" guard hit `BASH_SOURCE[0]: unbound variable` under `set -u`. PR #27 fixed the guard, but its deploy then failed because `docker-compose ps -q` prints 64-character container ids while `docker ps -aq` prints 12-character ones. The same container was passed to `docker rm -f` twice, the second call failed with "removal ... already in progress", and `set -e` ended the script after removal and before `up -d`. The site was down until `docker-compose up -d` was run by hand on the server.
+
+PR #28 lists containers with `docker ps -aq --no-trunc` so ids dedupe, removes one container per call and tolerates one that is already going away, and then checks that none is left. `deploy/test_lightsail_e2e.sh` runs the script through `bash -s` against fake `docker`/`docker-compose` with 64/12-character ids and the compose v1 `ContainerConfig` failure. It fails on the #27 script and passes on the #28 script. The #28 Deploy run (`39731429575`, 2026-10-22 06:02 UTC) succeeded on the Lightsail host: the old containers were removed, redis, web, and caddy were created, and `/stats` returned 200 on the third health check.
+
+Server recovery: the automatic deploy now works (run `39731429575`). The manual `docker-compose up -d` was needed to bring the site back after the failed #23, #24, and #27 deploys.
 
 ## Limitations
 

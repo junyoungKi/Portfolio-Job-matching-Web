@@ -97,7 +97,7 @@ def _patch_ai(monkeypatch, fail_descriptions=None):
 
 def test_one_select_and_one_commit_for_a_city(monkeypatch):
     calls, _state = _patch_ai(monkeypatch)
-    session = Session(existing=[("Known", "Acme")])
+    session = Session(existing=[("known", "acme", "seattle, wa", None)])
     jobs = [
         _job("Known"),
         _job("New A"),

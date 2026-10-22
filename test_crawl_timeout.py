@@ -48,11 +48,10 @@ class _Result:
         return _Scalars(self._row)
 
     def all(self):
-        # The batch lookup asks for (title, company) rows. A truthy ``exists`` stands
-        # for the default card in these tests (Role @ Acme) already being stored.
+        # A truthy ``exists`` stands for a legacy row: Role @ Acme in Austin, TX, no job id.
         if not self._row:
             return []
-        return [("Role", "Acme")]
+        return [("role", "acme", "austin, tx", None)]
 
 
 class Session:
@@ -234,7 +233,7 @@ def test_second_commit_failure_does_not_stop_the_next_card(monkeypatch, capsys):
     assert "Saved to DB: Second @ Acme" in out
 
 
-def test_duplicate_title_and_company_is_skipped_without_a_location_check(monkeypatch):
+def test_legacy_fallback_matches_title_company_and_location(monkeypatch):
     _install_sessions(monkeypatch, [{"exists": object()}])
     seen = {}
     _install_ai(monkeypatch, seen)
@@ -250,7 +249,7 @@ def test_duplicate_title_and_company_is_skipped_without_a_location_check(monkeyp
     where = str(Session.made[0].stmt.compile(dialect=postgresql.dialect())).upper().split("WHERE", 1)[1]
     assert "TITLE" in where
     assert "COMPANY" in where
-    assert "LOCATION" not in where
+    assert "LOCATION" in where
 
 
 def test_engine_pings_and_recycles_connections():

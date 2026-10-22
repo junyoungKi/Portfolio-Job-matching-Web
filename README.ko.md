@@ -59,7 +59,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     S1[6시간마다<br/>첫 실행은 시작 5초 후] --> C[Playwright: LinkedIn 검색 + 상세 페이지<br/>북미 8개 도시]
-    C --> D{같은 제목과 회사가<br/>이미 저장돼 있는가?}
+    C --> D{같은 LinkedIn 공고 id,<br/>또는 id 없는 기존 행의<br/>제목 + 회사 + 지역?}
     D -->|예| X[건너뜀]
     D -->|아니오| T[gpt-4o-mini: 고용 형태, 경력, 주요 기술<br/>+ 임베딩]
     T --> DB[(PostgreSQL + pgvector)]
@@ -296,7 +296,7 @@ Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], nex
 
 당장 취한 조치는 `docker-compose restart web`입니다. 멈추지 않던 프로세스가 종료되었습니다. 크롤은 `2026-10-22 04:18 UTC`에 다시 시작되었습니다. 공고 수가 회복되었다는 뜻은 아니고, 아래 코드 변경이 프로덕션에서 확인되었다는 뜻도 아닙니다.
 
-PR #19가 `main`에 병합되어 배포되면 크롤은 이렇게 바뀝니다. 도시마다 제한 시간이 있습니다 (`CRAWL_CITY_TIMEOUT_SECONDS`, 기본 1200). 한 번 전체 실행에도 6시간 간격보다 짧은 제한이 있습니다 (`CRAWL_JOB_TIMEOUT_SECONDS`, 기본 18000). Playwright의 실행, 페이지 이동, 종료와 OpenAI 클라이언트에 각각 제한 시간이 있습니다. 브라우저는 `finally`에서 닫습니다. `EPIPE` 같은 드라이버 오류는 그 도시를 끝내고 다음 도시는 계속합니다. 중복 확인과 커밋은 각각 짧은 세션을 엽니다. 풀은 `pool_pre_ping`과 `pool_recycle`(기본 1800초)을 사용합니다. 느린 await 직전에는 `[BATCH] Step {city} ({keyword}): {step}`을 찍습니다. 도시마다 수집, 저장, 중복 건너뜀, 실패 수를 찍습니다. 제한 시간을 넘기면 마지막 단계가 적힌 `[BATCH] Watchdog` 한 줄이 남습니다. 크롤 작업은 `coalesce=True`입니다 (`max_instances`는 1 유지). 중복 키는 여전히 제목과 회사입니다.
+PR #19가 `main`에 병합되어 배포되면 크롤은 이렇게 바뀝니다. 도시마다 제한 시간이 있습니다 (`CRAWL_CITY_TIMEOUT_SECONDS`, 기본 1200). 한 번 전체 실행에도 6시간 간격보다 짧은 제한이 있습니다 (`CRAWL_JOB_TIMEOUT_SECONDS`, 기본 18000). Playwright의 실행, 페이지 이동, 종료와 OpenAI 클라이언트에 각각 제한 시간이 있습니다. 브라우저는 `finally`에서 닫습니다. `EPIPE` 같은 드라이버 오류는 그 도시를 끝내고 다음 도시는 계속합니다. 중복 확인과 커밋은 각각 짧은 세션을 엽니다. 풀은 `pool_pre_ping`과 `pool_recycle`(기본 1800초)을 사용합니다. 느린 await 직전에는 `[BATCH] Step {city} ({keyword}): {step}`을 찍습니다. 도시마다 수집, 저장, 중복 건너뜀, 실패 수를 찍습니다. 제한 시간을 넘기면 마지막 단계가 적힌 `[BATCH] Watchdog` 한 줄이 남습니다. 크롤 작업은 `coalesce=True`입니다 (`max_instances`는 1 유지). 중복 판별은 카드 URL에 LinkedIn 공고 id가 있으면 그 id를 씁니다. `source_job_id`가 생기기 전에 저장된 행과, URL에 id가 없는 카드는 정규화한 제목, 회사, 지역으로 비교합니다.
 
 배포 후 서버에서:
 
@@ -313,7 +313,7 @@ docker-compose logs --tail=200 web | grep 'maximum number of running instances'
 - 인증이 없습니다. 이력서 전문이 저장되고, `/match/{id}`는 순차 정수 id를 쓰며, CORS는 모든 출처를 허용합니다. 민감한 이력서는 올리지 마세요.
 - 업로드한 이력서와 그 매칭 분석은 1시간 뒤에 삭제됩니다. 30일 정리는 수집된 공고에만 적용됩니다.
 - 크롤러는 8개 도시에서 "Software Engineer"만 검색하고, 실행당 도시별로 한 페이지(카드 25개)만 읽습니다. 매칭은 이력서 임베딩, 지역, 경력/고용 형태/기술 필터를 사용합니다.
-- 중복 판별은 제목과 회사가 정확히 같은지만 보기 때문에, 서로 다른 도시의 같은 직무는 하나로 취급됩니다.
+- 중복 판별은 카드 URL의 LinkedIn 공고 id를 씁니다. id가 다르면 같은 회사의 같은 제목이라도 다른 도시의 공고는 따로 저장됩니다. id가 없는 카드나, id 없이 저장된 행은 정규화한 제목, 회사, 지역으로 비교합니다.
 - 연봉은 수집하지 않습니다. 수집된 모든 공고에는 "Competitive Salary"라는 고정 문구가 저장됩니다.
 - LinkedIn 스크래핑은 차단되거나 HTML이 바뀌면 깨질 수 있고, 이용 약관과 충돌할 수 있습니다.
 - PDF만 지원하며, 텍스트 레이어가 없는 스캔 PDF는 쓸 수 있는 텍스트가 나오지 않습니다.

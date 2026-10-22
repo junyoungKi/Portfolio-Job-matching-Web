@@ -296,11 +296,15 @@ Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], nex
 
 One crawl run never finished. The exact blocking point is unknown (Playwright, OpenAI, or a database wait). `max_instances` is 1, so every later 6-hour tick was skipped while that run was still the running instance.
 
-Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say the posting count has recovered, and it does not say the code change below is verified in production.
+Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. Within roughly 25 minutes the container logs showed about 27 new `Saved to DB` lines and many `Skipped (duplicate)` lines, so collection resumed. That observation is the old code after the restart. It does not say what the posting count totals now, and it does not say the hang fix is proven.
 
-PR #19, once merged and deployed, changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup is still title + company.
+PR #19 is merged on `main`. It had not been deployed when those log lines were collected. Production has not shown `[BATCH] Step` or `[BATCH] Finished` yet, so the timeouts and step logs are not verified there. The next check is after deploying #19.
 
-After a deploy, on the server:
+#19 gives each city a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200) and the whole run a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1).
+
+The many `Skipped (duplicate)` lines are the title+company dedup. One posting with the same title was saved under two companies, Slack and Salesforce: same title, different company, two rows.
+
+After deploying #19, on the server:
 
 ```bash
 docker-compose logs --tail=200 web
@@ -308,7 +312,7 @@ docker-compose logs --tail=500 web | grep '\[BATCH\]'
 docker-compose logs --tail=200 web | grep 'maximum number of running instances'
 ```
 
-Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The skip line should not appear for that process.
+Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The `maximum number of running instances` skip line should not appear for that process.
 
 ## Limitations
 

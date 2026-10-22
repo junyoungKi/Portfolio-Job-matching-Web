@@ -107,6 +107,8 @@ deploy_main() {
   fi
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+# The workflow pipes this file to `bash -s`, where BASH_SOURCE is empty. Run the deploy when
+# executed directly or piped; stay quiet only when another script sources it (tests).
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
   deploy_main
 fi

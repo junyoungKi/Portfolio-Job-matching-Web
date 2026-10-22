@@ -13,7 +13,34 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _positive_number(name, default, cast):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        print(f"Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    if value <= 0:
+        print(f"Ignoring non-positive {name}={value}; using {default}")
+        return default
+    return value
+
+
+# The SDK default timeout is 600s with 2 retries, so one stalled call can occupy the crawl
+# for about half an hour. These bounds apply to every OpenAI call in the process, including
+# /match. Override them with OPENAI_TIMEOUT_SECONDS and OPENAI_MAX_RETRIES.
+OPENAI_TIMEOUT_SECONDS = _positive_number("OPENAI_TIMEOUT_SECONDS", 60, float)
+OPENAI_MAX_RETRIES = _positive_number("OPENAI_MAX_RETRIES", 2, int)
+
+client = AsyncOpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=OPENAI_TIMEOUT_SECONDS,
+    max_retries=OPENAI_MAX_RETRIES,
+)
 
 class AIService:
     """Thin wrapper around the OpenAI client exposing the AI operations used by the API and crawler."""

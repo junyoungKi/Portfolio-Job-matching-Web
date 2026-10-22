@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 
+from sqlalchemy.exc import DBAPIError, InterfaceError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, desc, or_, text, func
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -108,51 +109,257 @@ async def connect_redis() -> Optional[redis.asyncio.Redis]:
             print(f"Redis connection failed permanently: {ex}")
             return None
 
-async def scheduled_north_america_crawl():
-    """Crawl LinkedIn for every North American hub, tag new postings with AI metadata and store them.
+def _positive_int_env(name, default):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"[BATCH] Ignoring invalid {name}={raw!r}; using {default}")
+        return default
+    if value <= 0:
+        print(f"[BATCH] Ignoring non-positive {name}={value}; using {default}")
+        return default
+    return value
 
-    Runs on a schedule. Postings that already exist (same title and company) are skipped, and a
-    failure on one posting is rolled back without aborting the rest of the batch.
+
+# One crawl run did not finish, and with max_instances=1 every later tick was skipped.
+# Which await blocked is not known. The job deadline is under the 6-hour interval so
+# this instance has released the slot before the next tick. Each city has its own
+# deadline. The last "[BATCH] Step" line is the await that was in progress.
+CRAWL_JOB_TIMEOUT_SECONDS = _positive_int_env("CRAWL_JOB_TIMEOUT_SECONDS", 5 * 60 * 60)
+CRAWL_CITY_TIMEOUT_SECONDS = _positive_int_env("CRAWL_CITY_TIMEOUT_SECONDS", 20 * 60)
+
+
+class _CrawlProgress:
+    """The city and step written before each slow await, so a stall names itself."""
+
+    def __init__(self):
+        self.city = None
+        self.keyword = None
+        self.step = "not started"
+
+    def note(self, step):
+        self.step = step
+        city = self.city or "crawl"
+        keyword = self.keyword or "-"
+        print(f"[BATCH] Step {city} ({keyword}): {step}")
+
+
+class _CrawlCounts:
+    """Posting counters for one city, or for the whole crawl."""
+
+    def __init__(self):
+        self.collected = 0
+        self.saved = 0
+        self.skipped = 0
+        self.failed = 0
+
+    def add(self, other):
+        self.collected += other.collected
+        self.saved += other.saved
+        self.skipped += other.skipped
+        self.failed += other.failed
+
+
+def _duplicate_stmt(job):
+    """Lookup used to skip a posting. The key is title + company, not location."""
+    return select(models.JobPosting).filter(
+        models.JobPosting.title == job["title"],
+        models.JobPosting.company == job["company"],
+    )
+
+
+def _posting_from(job, keyword, meta, embedding):
+    skills = meta.get("skills", []) if isinstance(meta, dict) else []
+    if not isinstance(skills, list):
+        skills = [str(skills)]
+    return models.JobPosting(
+        title=job["title"],
+        company=job["company"],
+        description=job.get("description"),
+        location=job.get("location"),
+        salary=job.get("salary"),
+        search_keyword=keyword,
+        embedding=embedding,
+        employment_type=meta.get("employment_type", "Full-time") if isinstance(meta, dict) else "Full-time",
+        experience_level=meta.get("experience_level", "Junior") if isinstance(meta, dict) else "Junior",
+        skills=", ".join(str(skill) for skill in skills),
+    )
+
+
+async def _rollback_quietly(db):
+    """Roll back, and do not let a closed connection escape the except handler.
+
+    A rollback on a connection that is already closed raises ``InterfaceError``.
+    That must be logged and swallowed so it cannot replace the original error or
+    stop the rest of the city.
     """
+    try:
+        await db.rollback()
+    except (InterfaceError, DBAPIError) as exc:
+        print(f"[BATCH] Rollback on a closed connection was ignored: {exc}")
+    except Exception as exc:
+        print(f"[BATCH] Rollback failed: {exc}")
+
+
+async def _already_stored(job):
+    """Return whether this title and company are already stored. The session closes here."""
     async with AsyncSessionLocal() as db:
         try:
-            print(f"[BATCH] Starting scheduled collection and AI tagging: {datetime.now()}")
-            target_keywords = ["Software Engineer"]
-            for kw in target_keywords:
-                for city in job_collector.NA_HUBS:
-                    jobs = await job_collector.scrape_linkedin(kw, city)
-                    for job in jobs:
-                        try:
-                            stmt = select(models.JobPosting).filter(
-                                models.JobPosting.title == job['title'], 
-                                models.JobPosting.company == job['company']
-                            )
-                            result = await db.execute(stmt)
-                            exists = result.scalars().first()
-                            
-                            if not exists:
-                                meta = await ai_service.extract_job_metadata(job['description'])
-                                job_emb = await ai_service.get_embedding(job['description'])
-                                
-                                new_posting = models.JobPosting(
-                                    title=job['title'], company=job['company'], 
-                                    description=job['description'], location=job['location'], 
-                                    salary=job['salary'], search_keyword=kw, embedding=job_emb,
-                                    employment_type=meta.get('employment_type', 'Full-time'),
-                                    experience_level=meta.get('experience_level', 'Junior'),
-                                    skills=", ".join(meta.get('skills', []))
-                                )
-                                db.add(new_posting)
-                                await db.commit()
-                                print(f"Saved to DB: {job['title']} @ {job['company']}")
-                            else:
-                                print(f"Skipped (duplicate): {job['title']} @ {job['company']}")
-                        except Exception as inner_e:
-                            await db.rollback()
-                            print(f"Failed to process an individual posting: {inner_e}")
-                            continue
-        except Exception as e: 
+            result = await db.execute(_duplicate_stmt(job))
+            return result.scalars().first() is not None
+        except (InterfaceError, DBAPIError):
+            await _rollback_quietly(db)
+            raise
+
+
+async def _commit_posting(posting):
+    """Insert one posting on a new session and commit it. The session closes here."""
+    async with AsyncSessionLocal() as db:
+        db.add(posting)
+        try:
+            await db.commit()
+        except (InterfaceError, DBAPIError):
+            await _rollback_quietly(db)
+            raise
+
+
+async def _try_once_more(action, progress, retry_step):
+    """Run ``action``. On a closed connection, log it and try once with a fresh session."""
+    try:
+        return await action()
+    except (InterfaceError, DBAPIError) as exc:
+        print(f"[BATCH] Database connection failed, retrying once: {exc}")
+        progress.note(retry_step)
+        return await action()
+
+
+async def _persist_one_posting(job, keyword, stats, progress):
+    """Store one card, or skip it when the same title and company are already stored.
+
+    The duplicate check and the commit each open a session and close it before the next
+    await. OpenAI calls sit between those two sessions, so a model call does not hold a
+    connection. One posting's failure does not stop the next card.
+    """
+    title = job.get("title")
+    try:
+        progress.note(f"duplicate check {title}")
+        exists = await _try_once_more(
+            lambda: _already_stored(job),
+            progress,
+            f"duplicate check retry {title}",
+        )
+        if exists:
+            stats.skipped += 1
+            print(f"Skipped (duplicate): {title} @ {job.get('company')}")
+            return
+        progress.note(f"OpenAI metadata {title}")
+        meta = await ai_service.extract_job_metadata(job.get("description") or "")
+        progress.note(f"OpenAI embedding {title}")
+        embedding = await ai_service.get_embedding(job.get("description") or "")
+        posting = _posting_from(job, keyword, meta, embedding)
+        progress.note(f"commit {title}")
+        await _try_once_more(
+            lambda: _commit_posting(posting),
+            progress,
+            f"commit retry {title}",
+        )
+        stats.saved += 1
+        print(f"Saved to DB: {title} @ {job.get('company')}")
+    except Exception as inner_e:
+        stats.failed += 1
+        print(f"Failed to process an individual posting: {inner_e}")
+
+
+async def _persist_scraped_jobs(jobs, keyword, stats, progress):
+    for job in jobs:
+        await _persist_one_posting(job, keyword, stats, progress)
+
+
+async def _crawl_one_city(keyword, city, stats, progress):
+    """Scrape ``city``, then store each card on its own short sessions.
+
+    An inner ``TimeoutError`` from a single timed step is reported as a city failure.
+    The city deadline in the caller stays the only ``TimeoutError`` that means
+    "give up on this city and move on".
+    """
+    progress.city = city
+    progress.keyword = keyword
+    try:
+        progress.note("scraping LinkedIn")
+        jobs = await job_collector.scrape_linkedin(keyword, city, on_step=progress.note)
+        stats.collected = len(jobs)
+        await _persist_scraped_jobs(jobs, keyword, stats, progress)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Timed out inside the {city} crawl before the city deadline"
+        ) from exc
+
+
+async def _run_crawl(totals, progress):
+    """Visit every hub. A timed-out or failed city does not stop the next one."""
+    target_keywords = ["Software Engineer"]
+    for keyword in target_keywords:
+        for city in job_collector.NA_HUBS:
+            city_stats = _CrawlCounts()
+            started = time.perf_counter()
+            try:
+                await asyncio.wait_for(
+                    _crawl_one_city(keyword, city, city_stats, progress),
+                    timeout=CRAWL_CITY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                print(
+                    f"[BATCH] Watchdog: {city} ({keyword}) exceeded "
+                    f"{CRAWL_CITY_TIMEOUT_SECONDS}s; last step was {progress.step}. "
+                    "Continuing with the next city"
+                )
+            except Exception as exc:
+                print(f"[BATCH] City failed: {city} ({keyword}): {exc}")
+            elapsed = time.perf_counter() - started
+            totals.add(city_stats)
+            print(
+                f"[BATCH] {city}: Collected {city_stats.collected} cards, "
+                f"saved {city_stats.saved}, skipped {city_stats.skipped} (duplicate), "
+                f"failed {city_stats.failed}, took {elapsed:.0f} s"
+            )
+
+
+async def scheduled_north_america_crawl():
+    """Crawl LinkedIn for every North American hub, tag new postings, and store them.
+
+    Runs on a schedule. Postings that already exist (same title and company) are skipped.
+    A failure on one posting does not stop the rest of that city. The whole job has a
+    deadline, and each city has one, so this function returns even when one await does not.
+    """
+    started = time.perf_counter()
+    print(f"[BATCH] Starting scheduled collection and AI tagging: {datetime.now()}")
+    totals = _CrawlCounts()
+    progress = _CrawlProgress()
+    try:
+        try:
+            await asyncio.wait_for(
+                _run_crawl(totals, progress),
+                timeout=CRAWL_JOB_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            where = progress.city or "crawl"
+            keyword = progress.keyword or "-"
+            print(
+                f"[BATCH] Watchdog: run exceeded {CRAWL_JOB_TIMEOUT_SECONDS}s; "
+                f"last step was {where} ({keyword}): {progress.step}. "
+                "Ending this crawl so the next run can start"
+            )
+        except Exception as e:
             print(f"[BATCH] Batch-level error: {e}")
+    finally:
+        elapsed = time.perf_counter() - started
+        print(
+            f"[BATCH] Finished total saved {totals.saved}, skipped {totals.skipped}, "
+            f"failed {totals.failed}, took {elapsed:.0f} s"
+        )
 
 # Crawled postings stay on the 30-day clock. Uploaded resumes are personal data with no
 # login, so they are removed after one hour: long enough for the same session to re-run
@@ -202,10 +409,10 @@ async def cleanup_old_jobs():
         try:
             result = await db.execute(crawled_posting_delete_stmt(datetime.now()))
             await db.commit()
-            if result.rowcount > 0:
-                print(f"[CLEANUP] Deleted {result.rowcount} expired postings")
+            deleted = result.rowcount if result.rowcount is not None else 0
+            print(f"[CLEANUP] Deleted {deleted} expired postings")
         except Exception as e:
-            await db.rollback()
+            await _rollback_quietly(db)
             print(f"[CLEANUP] Error: {e}")
 
 
@@ -220,13 +427,14 @@ async def cleanup_expired_resumes():
             analysis_result = await db.execute(analyses_stmt)
             resume_result = await db.execute(resumes_stmt)
             await db.commit()
-            if resume_result.rowcount > 0:
-                print(
-                    f"[CLEANUP] Deleted {resume_result.rowcount} expired resumes "
-                    f"and {analysis_result.rowcount} match analyses"
-                )
+            resumes_deleted = resume_result.rowcount if resume_result.rowcount is not None else 0
+            analyses_deleted = analysis_result.rowcount if analysis_result.rowcount is not None else 0
+            print(
+                f"[CLEANUP] Deleted {resumes_deleted} expired resumes "
+                f"and {analyses_deleted} match analyses"
+            )
         except Exception as e:
-            await db.rollback()
+            await _rollback_quietly(db)
             print(f"[CLEANUP] Resume cleanup error: {e}")
 
 @asynccontextmanager
@@ -248,9 +456,32 @@ async def lifespan(app: FastAPI):
             print("Database tables are ready")
 
         scheduler = AsyncIOScheduler()
-        scheduler.add_job(scheduled_north_america_crawl, 'interval', hours=6, next_run_time=datetime.now() + timedelta(seconds=5))
-        scheduler.add_job(cleanup_old_jobs, 'cron', hour=0, minute=0)
-        scheduler.add_job(cleanup_expired_resumes, 'interval', minutes=USER_RESUME_CLEANUP_MINUTES)
+        # max_instances stays 1 so two crawls never run together. A run that has not
+        # returned by the next tick is skipped; the deadline above is what ends that run.
+        # coalesce=True collapses missed ticks into one run.
+        scheduler.add_job(
+            scheduled_north_america_crawl,
+            'interval',
+            hours=6,
+            next_run_time=datetime.now() + timedelta(seconds=5),
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            cleanup_old_jobs,
+            'cron',
+            hour=0,
+            minute=0,
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            cleanup_expired_resumes,
+            'interval',
+            minutes=USER_RESUME_CLEANUP_MINUTES,
+            max_instances=1,
+            coalesce=True,
+        )
         scheduler.start()
         yield
         scheduler.shutdown()

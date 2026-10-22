@@ -143,11 +143,23 @@ def test_resume_cleanup_is_scheduled_on_a_short_interval(monkeypatch):
     asyncio.run(run())
 
     by_name = {name: (trigger, kwargs) for name, trigger, kwargs in jobs}
-    assert by_name["cleanup_old_jobs"] == ("cron", {"hour": 0, "minute": 0})
+    trigger, kwargs = by_name["cleanup_old_jobs"]
+    assert trigger == "cron"
+    assert kwargs["hour"] == 0
+    assert kwargs["minute"] == 0
+    assert kwargs["max_instances"] == 1
+    assert kwargs["coalesce"] is True
     trigger, kwargs = by_name["cleanup_expired_resumes"]
     assert trigger == "interval"
     assert kwargs["minutes"] == main.USER_RESUME_CLEANUP_MINUTES
     assert kwargs["minutes"] <= 60
+    assert kwargs["max_instances"] == 1
+    assert kwargs["coalesce"] is True
+    trigger, kwargs = by_name["scheduled_north_america_crawl"]
+    assert trigger == "interval"
+    assert kwargs["hours"] == 6
+    assert kwargs["max_instances"] == 1
+    assert kwargs["coalesce"] is True
 
 
 class _RecordingSession:
@@ -180,3 +192,16 @@ def _fixed_datetime(moment: datetime):
             return moment
 
     return Fixed
+
+
+def test_cleanup_logs_when_nothing_is_deleted(monkeypatch, capsys):
+    session = _RecordingSession()
+    monkeypatch.setattr(main, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr(main, "datetime", _fixed_datetime(datetime(2026, 10, 9, 15, 0, 0)))
+
+    asyncio.run(main.cleanup_old_jobs())
+    asyncio.run(main.cleanup_expired_resumes())
+
+    out = capsys.readouterr().out
+    assert "[CLEANUP] Deleted 0 expired postings" in out
+    assert "[CLEANUP] Deleted 0 expired resumes and 0 match analyses" in out

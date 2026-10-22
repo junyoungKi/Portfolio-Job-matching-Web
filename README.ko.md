@@ -276,6 +276,38 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 
 롤백: `git log --oneline -n 10`. 이 compose 파일이 아직 체크아웃된 상태에서 컨테이너 id를 적어둡니다 (`docker-compose ps -q web`, `docker-compose ps -q caddy`). 이전 정상 커밋으로 체크아웃한 뒤 그 id를 `docker rm -f`로 지우고 `up -d --build`를 실행합니다. `docker-compose down -v`는 쓰지 마세요. 이전 compose는 `web`이 80번을 쓰므로, 그 `up` 전에 caddy는 없어야 합니다. Cloudflare가 이미 Full (strict)이면, 오리진 80번이 다시 HTTP를 서빙한 다음에 Flexible로 되돌리세요. HTTP 오리진에 Full (strict)를 두면 error 525가 납니다. `/legacy/`는 이전 UI와 비교할 수 있도록 계속 접근 가능합니다.
 
+## 문제 해결: 크롤러가 수집을 멈춤
+
+공개 사이트의 `GET /stats`(`total_jobs`, 크롤된 행만, `company <> 'USER_UPLOAD'`)가 1823에서 멈춰 있었습니다. Postgres에서 그 행들의 `job_postings.created_at` 최댓값은 `2026-10-17 23:03:22`였습니다.
+
+```sql
+SELECT count(*) AS stats_count, max(created_at) AS latest
+FROM job_postings
+WHERE company <> 'USER_UPLOAD';
+```
+
+`docker-compose` 1.29.2의 `logs`에는 `--since`가 없습니다. `web` 컨테이너 로그에는 다음이 있었습니다.
+
+```text
+Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], next run at: 2026-10-21 22:51:29 UTC)" skipped: maximum number of running instances reached (1)
+```
+
+크롤 한 번이 끝나지 않았습니다. 어디서 멈췄는지는 알 수 없습니다 (Playwright, OpenAI, 또는 DB 대기). `max_instances`가 1이라, 그 실행이 살아 있는 동안 6시간마다의 다음 실행은 모두 건너뛰어졌습니다.
+
+당장 취한 조치는 `docker-compose restart web`입니다. 멈추지 않던 프로세스가 종료되었습니다. 크롤은 `2026-10-22 04:18 UTC`에 다시 시작되었습니다. 공고 수가 회복되었다는 뜻은 아니고, 아래 코드 변경이 프로덕션에서 확인되었다는 뜻도 아닙니다.
+
+PR #19가 `main`에 병합되어 배포되면 크롤은 이렇게 바뀝니다. 도시마다 제한 시간이 있습니다 (`CRAWL_CITY_TIMEOUT_SECONDS`, 기본 1200). 한 번 전체 실행에도 6시간 간격보다 짧은 제한이 있습니다 (`CRAWL_JOB_TIMEOUT_SECONDS`, 기본 18000). Playwright의 실행, 페이지 이동, 종료와 OpenAI 클라이언트에 각각 제한 시간이 있습니다. 브라우저는 `finally`에서 닫습니다. `EPIPE` 같은 드라이버 오류는 그 도시를 끝내고 다음 도시는 계속합니다. 중복 확인과 커밋은 각각 짧은 세션을 엽니다. 풀은 `pool_pre_ping`과 `pool_recycle`(기본 1800초)을 사용합니다. 느린 await 직전에는 `[BATCH] Step {city} ({keyword}): {step}`을 찍습니다. 도시마다 수집, 저장, 중복 건너뜀, 실패 수를 찍습니다. 제한 시간을 넘기면 마지막 단계가 적힌 `[BATCH] Watchdog` 한 줄이 남습니다. 크롤 작업은 `coalesce=True`입니다 (`max_instances`는 1 유지). 중복 키는 여전히 제목과 회사입니다.
+
+배포 후 서버에서:
+
+```bash
+docker-compose logs --tail=200 web
+docker-compose logs --tail=500 web | grep '\[BATCH\]'
+docker-compose logs --tail=200 web | grep 'maximum number of running instances'
+```
+
+`[BATCH] Starting` 다음에 `[BATCH] Step`이 나오고, 도시마다 `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` 한 줄이 나온 뒤 `[BATCH] Finished`가 나와야 합니다. 그 프로세스의 로그에 skip 줄이 있으면 안 됩니다.
+
 ## 한계
 
 - 인증이 없습니다. 이력서 전문이 저장되고, `/match/{id}`는 순차 정수 id를 쓰며, CORS는 모든 출처를 허용합니다. 민감한 이력서는 올리지 마세요.

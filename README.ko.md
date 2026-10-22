@@ -227,7 +227,7 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### 배포
 
-`main`에 병합하는 것이 배포입니다. `.github/workflows/deploy.yml`이 GitHub 호스트 러너에서 Lightsail 서버로 SSH 접속한 뒤 `deploy/lightsail.sh`를 실행합니다. 스크립트는 체크아웃을 `origin/main`으로 리셋하고, `web` 이미지를 빌드한 다음 `web`과 `caddy`를 다시 만듭니다. Redis와 `deploy/certs`는 삭제하지 않습니다 (`git reset --hard`는 gitignore된 파일을 남기고, 스크립트는 `git clean`을 하지 않으며 Redis 컨테이너도 지우지 않습니다). 스크립트가 실패하면 작업도 실패합니다. 일회성 설정은 저장소 Actions 시크릿 세 개와, 그 키 쌍의 공개 키를 서버 사용자의 `~/.ssh/authorized_keys`에 넣는 것입니다.
+`main`에 병합하는 것이 배포입니다. `.github/workflows/deploy.yml`이 GitHub 호스트 러너에서 Lightsail 서버로 SSH 접속한 뒤 `deploy/lightsail.sh`를 실행합니다. 스크립트는 체크아웃을 `origin/main`으로 리셋하고, `web` 이미지를 빌드한 다음 `docker-compose up -d` 전에 `web`, `caddy`, `redis` 컨테이너를 지웁니다. docker-compose 1.29.2는 기존 컨테이너를 다시 만들 때 `KeyError: 'ContainerConfig'`가 납니다. PR #23이 redis에 `restart: unless-stopped`를 넣은 뒤 `up`이 redis를 다시 만들려다 실패했고, 이미 지워진 `web`과 `caddy`가 다시 만들어지지 않아 사이트가 내려갔습니다. Redis는 `/match` 캐시뿐입니다 (`app/main.py`의 `match_results:*`, TTL 1시간, compose 볼륨 없음). 그 컨테이너를 지우면 캐시가 비고, 캐시가 없는 다음 `/match`가 다시 계산합니다. Postgres와 `deploy/certs`는 남습니다 (`git reset --hard`는 gitignore된 파일을 남기고, 스크립트는 `git clean`이나 `docker-compose down`을 하지 않습니다). redis의 compose 설정이 나중에 바뀌어도, 스크립트가 `up` 전에 redis 컨테이너를 지우지 않으면 같은 KeyError가 납니다. 스크립트가 실패하면 작업도 실패합니다. 일회성 설정은 저장소 Actions 시크릿 세 개와, 그 키 쌍의 공개 키를 서버 사용자의 `~/.ssh/authorized_keys`에 넣는 것입니다.
 
 - `LIGHTSAIL_HOST`: 인스턴스의 공인 IP 또는 DNS
 - `LIGHTSAIL_USER`: `ubuntu`
@@ -242,15 +242,18 @@ cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
 
 # docker-compose 1.29.2는 기존 컨테이너를 다시 만들 때 KeyError: 'ContainerConfig'가 납니다.
-# up 전에 web 컨테이너를 docker rm으로 지웁니다. caddy가 이미 있으면 그것도 지웁니다.
-# `docker-compose down -v`는 쓰지 마세요. 볼륨이 삭제됩니다.
-# `docker-compose ps -q`는 서비스 단위라 디렉터리 이름에 들어 있는 "Web"과는 무관합니다.
-for svc in web caddy; do
-  id=$(docker-compose ps -q "$svc")
-  if [ -n "$id" ]; then docker rm -f "$id"; fi
-done
+# 실패한 recreate는 이전 컨테이너 이름을 바꿉니다
+# (예: 80209f74697e_portfolio-job-matching-web_redis_1). 그 뒤 `up`의 나머지는
+# 실행되지 않습니다. up 전에 web, caddy, redis와 이름이 바뀐 나머지를 지우세요.
+# Redis는 매칭 캐시뿐이라 이 작업은 캐시를 비웁니다.
+# `docker-compose down`과 `down -v`는 쓰지 마세요.
+# redis의 compose 설정이 나중에 바뀌면, 여기서 redis를 지우지 않는 한 같은 KeyError가 납니다.
+# id는 따옴표 없이 넘겨 컨테이너 id를 모두 지웁니다.
+ids=$(docker ps -aq --filter name=portfolio-job-matching-web)
+if [ -n "$ids" ]; then docker rm -f $ids; fi
 docker-compose up -d --build
 docker-compose logs -f web             # "Application startup complete" 확인
+curl -sf http://127.0.0.1:8000/stats
 ```
 
 Cloudflare를 바꾸기 전에 인스턴스에서 오리진 TLS를 확인합니다.

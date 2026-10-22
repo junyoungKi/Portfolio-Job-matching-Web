@@ -9,6 +9,8 @@ trap 'rm -rf "${tmpdir}"' EXIT
 
 log="${tmpdir}/calls"
 err="${tmpdir}/err"
+removed="${tmpdir}/removed"
+: > "${removed}"
 export HOME="${tmpdir}/home"
 mkdir -p "${HOME}/Portfolio-Job-matching-Web"
 export LIGHTSAIL_HEALTH_ATTEMPTS=2
@@ -42,7 +44,18 @@ docker-compose() { echo "compose $*" >> "${log}"; }
 # shellcheck source=deploy/lightsail.sh
 source "${root}/deploy/lightsail.sh"
 
+# Prints the given container ids that a stub `docker rm` has not removed yet.
+present_ids() {
+  local id
+  for id in "$@"; do
+    if ! grep -qxF "${id}" "${removed}"; then
+      echo "${id}"
+    fi
+  done
+}
+
 reset_stubs() {
+  : > "${removed}"
   : > "${log}"
   : > "${err}"
   curl_rc=0
@@ -62,13 +75,18 @@ remove_unions_compose_ps_and_renamed_leftovers() {
   docker() {
     echo "docker $*" >> "${log}"
     if [ "$1" = "ps" ]; then
-      printf '%s\n' "redisid" "80209f74697e"
+      present_ids "redisid" "80209f74697e"
+    fi
+    if [ "$1" = "rm" ]; then
+      echo "$3" >> "${removed}"
     fi
   }
   remove_project_containers
   grep -q "compose ps -q -a web caddy redis" "${log}" || fail "compose ps missed redis"
-  grep -q "docker ps -aq --filter name=portfolio-job-matching-web" "${log}" || fail "name filter missing"
-  grep -q "docker rm -f webid caddyid redisid 80209f74697e" "${log}" || fail "rm ids: $(cat "${log}")"
+  grep -q "docker ps -aq --no-trunc --filter name=portfolio-job-matching-web" "${log}" || fail "name filter missing"
+  for id in webid caddyid redisid 80209f74697e; do
+    grep -q "^docker rm -f ${id}$" "${log}" || fail "rm ${id}: $(cat "${log}")"
+  done
   if grep -q "down" "${log}"; then
     fail "down was invoked"
   fi
@@ -104,7 +122,10 @@ up_failure_prints_recovery_and_stops() {
   docker() {
     echo "docker $*" >> "${log}"
     if [ "$1" = "ps" ]; then
-      echo "80209f74697e"
+      present_ids "80209f74697e"
+    fi
+    if [ "$1" = "rm" ]; then
+      echo "$3" >> "${removed}"
     fi
   }
   curl() { fail "curl ran after up failed"; }
@@ -156,7 +177,7 @@ success_removes_redis_then_checks_stats() {
   if ! (deploy_main > "${tmpdir}/out" 2> "${err}"); then
     fail "deploy_main failed on the success path: $(cat "${err}")"
   fi
-  grep -q "docker rm -f webid caddyid redisid" "${log}" || fail "success path did not remove redis"
+  grep -q "^docker rm -f redisid$" "${log}" || fail "success path did not remove redis"
   grep -q "compose up -d" "${log}" || fail "success path did not up"
   grep -q "curl -sf -o /dev/null -w %{http_code}" "${log}" || fail "success path skipped /stats"
   if grep -q "down" "${log}"; then

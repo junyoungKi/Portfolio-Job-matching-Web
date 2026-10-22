@@ -20,7 +20,7 @@ health_attempts="${LIGHTSAIL_HEALTH_ATTEMPTS:-30}"
 health_sleep="${LIGHTSAIL_HEALTH_SLEEP:-2}"
 
 remove_project_containers() {
-  local compose_ids docker_ids ids
+  local compose_ids docker_ids ids id remaining
   # web, caddy, and redis. Leaving redis in place makes `up` recreate it when
   # its compose config changes, and docker-compose 1.29.2 then raises
   # KeyError: 'ContainerConfig', stops after renaming redis, and never creates
@@ -29,14 +29,32 @@ remove_project_containers() {
   if ! compose_ids="$(docker-compose ps -q -a web caddy redis)"; then
     return 1
   fi
-  if ! docker_ids="$(docker ps -aq --filter "name=${compose_project}")"; then
+  # --no-trunc: `docker-compose ps -q` prints 64-character ids and plain
+  # `docker ps -q` prints 12-character ones. Mixed, the same container is listed
+  # twice and the second `docker rm` fails with "removal ... already in progress".
+  if ! docker_ids="$(docker ps -aq --no-trunc --filter "name=${compose_project}")"; then
     return 1
   fi
   ids="$(printf '%s\n%s\n' "${compose_ids}" "${docker_ids}" | awk 'NF && !seen[$0]++')"
+  # One container per call: a container that is already going away must not stop
+  # the rest. The check below decides whether anything is really left.
+  for id in ${ids}; do
+    docker rm -f "${id}" || echo "docker rm -f ${id} failed; checking whether it is gone" >&2
+  done
   if [ -n "${ids}" ]; then
-    # Ids are hex. Unquoted so every id is removed.
-    # shellcheck disable=SC2086
-    docker rm -f ${ids}
+    if ! remaining="$(docker ps -aq --no-trunc --filter "name=${compose_project}")"; then
+      return 1
+    fi
+    if [ -n "${remaining}" ]; then
+      sleep 2
+      if ! remaining="$(docker ps -aq --no-trunc --filter "name=${compose_project}")"; then
+        return 1
+      fi
+    fi
+    if [ -n "${remaining}" ]; then
+      echo "Containers still present after removal: ${remaining}" >&2
+      return 1
+    fi
   fi
 }
 

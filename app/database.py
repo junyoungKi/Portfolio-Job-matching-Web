@@ -61,6 +61,17 @@ def async_engine_kwargs():
     }
 
 
+def tcp_keepalive_enabled():
+    """Return whether the connect hook should set TCP keepalive.
+
+    Default is on, matching the previous deploy. Set ``DB_TCP_KEEPALIVE`` to
+    ``0``, ``false``, ``no``, or ``off`` to skip the hook. The hook calls
+    ``setsockopt`` only; it does not call into OpenSSL.
+    """
+    raw = os.getenv("DB_TCP_KEEPALIVE", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def enable_tcp_keepalive(dbapi_connection):
     """Turn on TCP keepalive for one asyncpg connection, when the socket is visible.
 
@@ -90,6 +101,8 @@ engine = create_async_engine(SQLALCHEMY_DATABASE_URL, **async_engine_kwargs())
 
 @event.listens_for(engine.sync_engine, "connect")
 def _enable_tcp_keepalive(dbapi_connection, connection_record):
+    if not tcp_keepalive_enabled():
+        return
     try:
         enable_tcp_keepalive(dbapi_connection)
     except Exception as exc:

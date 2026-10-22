@@ -8,20 +8,30 @@
 services:
   web:
     build: .
+    # A SIGSEGV (exit 139) previously left this container stopped, and the site
+    # stayed down because nothing restarted it. unless-stopped brings it back
+    # unless an operator stopped it on purpose.
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # Overridable from the project .env. uvloop is the default. asyncio disables it.
+      UVICORN_LOOP: ${UVICORN_LOOP:-uvloop}
+      PYTHONUNBUFFERED: "1"
     depends_on:
       - redis
 
   redis:
     image: redis:latest
+    restart: unless-stopped
     ports:
       - "6379:6379"
 
   caddy:
     image: caddy:2
+    restart: unless-stopped
     ports:
       - "443:443"
       - "80:80"

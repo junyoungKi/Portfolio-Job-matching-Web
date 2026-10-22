@@ -261,6 +261,38 @@ def test_engine_pings_and_recycles_connections():
     assert database.engine.pool._recycle == database.DB_POOL_RECYCLE_SECONDS
 
 
+def test_faulthandler_is_enabled_for_all_threads():
+    import faulthandler
+    assert faulthandler.is_enabled()
+
+
+def test_tcp_keepalive_hook_can_be_disabled(monkeypatch):
+    options = []
+
+    class Sock:
+        def setsockopt(self, level, opt, value):
+            options.append((level, opt, value))
+
+    class Transport:
+        def get_extra_info(self, name):
+            return Sock() if name == "socket" else None
+
+    class Raw:
+        _transport = Transport()
+
+    class Conn:
+        _connection = Raw()
+
+    monkeypatch.setenv("DB_TCP_KEEPALIVE", "0")
+    database._enable_tcp_keepalive(Conn(), None)
+    assert options == []
+    assert database.tcp_keepalive_enabled() is False
+
+    monkeypatch.setenv("DB_TCP_KEEPALIVE", "1")
+    database._enable_tcp_keepalive(Conn(), None)
+    assert (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) in options
+
+
 def test_tcp_keepalive_is_set_on_the_asyncpg_socket():
     options = []
 

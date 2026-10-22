@@ -10,6 +10,13 @@ Responsibilities:
     - Exposes the REST API: ``/stats``, ``/process-resume`` and ``/match/{resume_id}``.
     - Serves the React dashboard (``frontend/dist``) at ``/`` and the legacy static UI at ``/legacy``.
 """
+import faulthandler
+
+# A SIGSEGV in a native library otherwise dies with no Python traceback.
+# all_threads=True prints every thread. The 2026-10-22 fault was on a non-main
+# thread, inside libcrypto.so.3.
+faulthandler.enable(all_threads=True)
+
 import sys, asyncio, os, re, shutil, time, json, redis, hashlib
 import aiofiles
 import uuid

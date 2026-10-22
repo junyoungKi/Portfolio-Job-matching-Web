@@ -33,4 +33,12 @@ COPY . .
 # Bring in only the built static assets; Node itself is not needed at runtime.
 COPY --from=frontend-build /frontend/dist ./frontend/dist
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Unbuffered stdout so a SIGSEGV does not drop the last log lines in the block buffer.
+# UVICORN_LOOP=uvloop keeps the previous uvicorn[standard] default. Set it to asyncio
+# in the server .env to run without uvloop (--loop asyncio).
+ENV PYTHONUNBUFFERED=1 \
+    UVICORN_LOOP=uvloop
+
+# $$ keeps the variable for the container shell. A single $ would be baked in at image build
+# from the ENV line above, and a later .env override would not change the flag.
+CMD uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop "$${UVICORN_LOOP:-uvloop}"

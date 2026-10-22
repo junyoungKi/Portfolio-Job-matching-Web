@@ -229,7 +229,7 @@ chmod 600 deploy/certs/origin-key.pem
 
 ### Deploy
 
-Merging to `main` is the deploy. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail server, and runs `deploy/lightsail.sh`. The script resets the checkout to `origin/main`, builds the `web` image, and recreates `web` and `caddy`. It does not delete Redis or `deploy/certs` (`git reset --hard` leaves gitignored files, and the script does not `git clean` or remove the Redis container). The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
+Merging to `main` is the deploy. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail server, and runs `deploy/lightsail.sh`. The script resets the checkout to `origin/main`, builds the `web` image, and removes the `web`, `caddy`, and `redis` containers before `docker-compose up -d`. docker-compose 1.29.2 raises `KeyError: 'ContainerConfig'` when it recreates an existing container. PR #23 added `restart: unless-stopped` on redis, `up` tried to recreate it, and the failed recreate left the site down because `web` and `caddy` had already been removed. Redis is only the `/match` cache (`match_results:*` in `app/main.py`, one-hour TTL, no compose volume), so removing that container clears the cache and the next uncached `/match` recomputes it. Postgres and `deploy/certs` stay (`git reset --hard` leaves gitignored files; the script does not `git clean` or run `docker-compose down`). A future compose-config change on redis hits the same KeyError unless the script still removes the redis container before `up`. The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
 
 - `LIGHTSAIL_HOST`: public IP or DNS of the instance
 - `LIGHTSAIL_USER`: `ubuntu`
@@ -244,15 +244,18 @@ cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
 
 # docker-compose 1.29.2 raises KeyError: 'ContainerConfig' when it recreates an
-# existing container. Remove the web container (and caddy, if it already exists)
-# with docker rm before up. Do not use `docker-compose down -v` (that deletes volumes).
-# `docker-compose ps -q` targets the service, so the directory name "Web" is not a problem.
-for svc in web caddy; do
-  id=$(docker-compose ps -q "$svc")
-  if [ -n "$id" ]; then docker rm -f "$id"; fi
-done
+# existing container. A failed recreate renames the old one (for example
+# 80209f74697e_portfolio-job-matching-web_redis_1) and aborts, so the rest of
+# `up` never runs. Remove web, caddy, and redis, including those renamed
+# leftovers, before up. Redis is only the match cache; this clears it.
+# Do not use `docker-compose down` or `down -v`.
+# A future compose-config change on redis repeats the KeyError unless redis is
+# removed here before up. Unquoted ids so every container id is removed.
+ids=$(docker ps -aq --filter name=portfolio-job-matching-web)
+if [ -n "$ids" ]; then docker rm -f $ids; fi
 docker-compose up -d --build
 docker-compose logs -f web             # wait for "Application startup complete"
+curl -sf http://127.0.0.1:8000/stats
 ```
 
 Confirm origin TLS on the instance before changing Cloudflare:

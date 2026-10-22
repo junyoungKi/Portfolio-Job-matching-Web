@@ -278,6 +278,38 @@ curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 
 Rollback: `git log --oneline -n 10`. While this compose file is still checked out, note the container ids (`docker-compose ps -q web` and `docker-compose ps -q caddy`), check out the previous good commit, `docker rm -f` those ids, then `up -d --build`. Do not use `docker-compose down -v`. The previous compose publishes port 80 on `web`, so caddy must be gone before that `up`. If Cloudflare is already Full (strict), set it back to Flexible only after origin port 80 serves HTTP again; Full (strict) against an HTTP origin returns error 525. `/legacy/` stays available to compare against the old UI.
 
+## Troubleshooting: crawler stopped collecting
+
+On the public site, `GET /stats` (`total_jobs`, crawled rows only, `company <> 'USER_UPLOAD'`) stayed at 1823. In Postgres the latest `job_postings.created_at` for those rows was `2026-10-17 23:03:22`.
+
+```sql
+SELECT count(*) AS stats_count, max(created_at) AS latest
+FROM job_postings
+WHERE company <> 'USER_UPLOAD';
+```
+
+`docker-compose` 1.29.2 has no `--since` on `logs`. The web container log contained:
+
+```text
+Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], next run at: 2026-10-21 22:51:29 UTC)" skipped: maximum number of running instances reached (1)
+```
+
+One crawl run never finished. The exact blocking point is unknown (Playwright, OpenAI, or a database wait). `max_instances` is 1, so every later 6-hour tick was skipped while that run was still the running instance.
+
+Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say the posting count has recovered, and it does not say the code change below is verified in production.
+
+PR #19, once merged and deployed, changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup is still title + company.
+
+After a deploy, on the server:
+
+```bash
+docker-compose logs --tail=200 web
+docker-compose logs --tail=500 web | grep '\[BATCH\]'
+docker-compose logs --tail=200 web | grep 'maximum number of running instances'
+```
+
+Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The skip line should not appear for that process.
+
 ## Limitations
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.

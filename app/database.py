@@ -92,6 +92,7 @@ def _enable_tcp_keepalive(dbapi_connection, connection_record):
         enable_tcp_keepalive(dbapi_connection)
     except Exception as exc:
         print(f"TCP keepalive was not enabled on a database connection: {exc}")
+
 # Log only the host/database part of the URL so that credentials are never printed.
 masked_url = SQLALCHEMY_DATABASE_URL.split("@")[-1] if "@" in SQLALCHEMY_DATABASE_URL else SQLALCHEMY_DATABASE_URL
 print(f"[DB Connection Target]: {masked_url}")

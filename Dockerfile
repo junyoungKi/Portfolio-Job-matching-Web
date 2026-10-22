@@ -39,6 +39,9 @@ COPY --from=frontend-build /frontend/dist ./frontend/dist
 ENV PYTHONUNBUFFERED=1 \
     UVICORN_LOOP=uvloop
 
-# $$ keeps the variable for the container shell. A single $ would be baked in at image build
-# from the ENV line above, and a later .env override would not change the flag.
-CMD uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop "$${UVICORN_LOOP:-uvloop}"
+# Exec-form CMD does not run a shell, so sh -c expands UVICORN_LOOP when the container
+# starts (a later .env override still applies). Docker does not expand variables inside CMD
+# at build time. A doubled dollar sign is only an escape in docker-compose.yml, not here: in
+# a Dockerfile it reaches sh as the shell PID and breaks the --loop value. exec lets uvicorn
+# receive SIGTERM from docker stop.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop ${UVICORN_LOOP:-uvloop}"]

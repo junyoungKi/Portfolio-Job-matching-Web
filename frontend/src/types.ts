@@ -11,6 +11,7 @@ export type Lang = 'ko' | 'en'
 
 /** One matched job as returned by `GET /match/{id}`, with analyses in both languages. */
 export interface JobMatch {
+  id?: number
   title: string
   company: string
   location: string

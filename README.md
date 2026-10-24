@@ -365,6 +365,16 @@ PR #28 lists containers with `docker ps -aq --no-trunc` so ids dedupe, removes o
 
 Server recovery: the automatic deploy now works (run `39731429575`). The manual `docker-compose up -d` was needed to bring the site back after the failed #23, #24, and #27 deploys.
 
+## Troubleshooting: moving the project to a new computer
+
+This section records why the app is containerized. It is an environment-continuity note for a machine move. It is separate from the later Lightsail deploy failures (#23, #24, and #27) and from the `libcrypto.so.3` segfault. Docker was not added to fix those.
+
+The project moved from a computer in Korea to a new computer after a transfer to a US university. Reinstalling the language runtimes, libraries, and tools, and keeping their versions aligned, was a burden, and the local environment could drift. The image installs those pieces: Python 3.11, Node 22 for the frontend build, Playwright and Chromium (`playwright install chromium --with-deps`), the Python libraries in `requirements.txt`, and the apt packages `build-essential` and `curl`. The app was containerized so the same image runs on any machine that has Docker. That is what kept development continuous across the two machines.
+
+`docker-compose.yml` starts `web`, `redis`, and `caddy`. `web` is built from the Dockerfile. The Node 22 stage builds the React frontend, and the Python 3.11 stage runs the app (FastAPI with uvicorn) with that build copied in as `frontend/dist`. `redis` uses the image `redis:latest`. `caddy` uses `caddy:2`. PostgreSQL is not in the compose file. The database is whatever `DATABASE_URL` in `.env` points to.
+
+`.env`, the secret values in it, and `deploy/certs/` are not baked into the image. `.dockerignore` excludes `.env`, `.env.*`, and `deploy/certs/`. Compose supplies `.env` through `env_file` and mounts `deploy/certs/origin.pem` and `deploy/certs/origin-key.pem` into Caddy. Those files still have to be present on the machine. The host still needs Docker and Docker Compose installed (`docker compose` in the local instructions; `docker-compose` on the Lightsail host). Containerization removes the app toolchain from the host. It does not remove Docker.
+
 ## Limitations
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.

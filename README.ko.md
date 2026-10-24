@@ -363,6 +363,16 @@ PR #28은 `docker ps -aq --no-trunc`로 id를 통일해 중복을 없애고, 컨
 
 서버 복구: 자동 배포가 이제 동작합니다(run `39731429575`). #23, #24, #27 배포가 실패한 뒤에는 사이트를 되살리려고 서버에서 `docker-compose up -d`를 직접 실행해야 했습니다.
 
+## 문제 해결: 프로젝트를 새 컴퓨터로 옮김
+
+이 절은 앱을 컨테이너로 만든 이유를 적습니다. 컴퓨터를 옮긴 뒤에도 환경을 이어 가기 위한 기록입니다. 이후의 Lightsail 배포 실패(#23, #24, #27)와 `libcrypto.so.3` segfault와는 별개입니다. Docker는 그 문제를 고치려고 넣은 것이 아닙니다.
+
+프로젝트는 한국에 있던 컴퓨터에서, 미국 대학으로 옮긴 뒤의 새 컴퓨터로 옮겨졌습니다. 언어 런타임, 라이브러리, 도구를 다시 설치하고 버전을 맞추는 일이 부담이었고, 로컬 환경이 서로 달라질 수 있었습니다. 이미지가 설치하는 항목은 Python 3.11, 프론트엔드 빌드용 Node 22, Playwright와 Chromium(`playwright install chromium --with-deps`), `requirements.txt`의 Python 라이브러리, apt 패키지 `build-essential`과 `curl`입니다. 같은 이미지가 Docker가 있는 머신에서 그대로 돌도록 앱을 컨테이너로 만들었습니다. 두 컴퓨터 사이에서 개발을 이어 가게 한 것이 그것입니다.
+
+`docker-compose.yml`은 `web`, `redis`, `caddy`를 띄웁니다. `web`은 Dockerfile로 빌드합니다. Node 22 스테이지가 React 프론트엔드를 빌드하고, Python 3.11 스테이지가 그 빌드를 `frontend/dist`로 복사한 뒤 앱(uvicorn으로 서빙하는 FastAPI)을 실행합니다. `redis`는 이미지 `redis:latest`를, `caddy`는 `caddy:2`를 씁니다. PostgreSQL은 compose 파일에 없습니다. 데이터베이스는 `.env`의 `DATABASE_URL`이 가리키는 곳입니다.
+
+`.env`와 그 안의 비밀 값, `deploy/certs/`는 이미지에 포함되지 않습니다. `.dockerignore`가 `.env`, `.env.*`, `deploy/certs/`를 빌드 컨텍스트에서 뺍니다. Compose는 `env_file`로 `.env`를 넣고, `deploy/certs/origin.pem`과 `deploy/certs/origin-key.pem`을 Caddy에 마운트합니다. 그 파일은 그 머신에 있어야 합니다. 호스트에는 Docker와 Docker Compose가 설치되어 있어야 합니다(로컬 안내의 `docker compose`, Lightsail 호스트의 `docker-compose`). 컨테이너는 앱 도구(Python, Node, Playwright, 시스템 패키지)를 호스트에서 빼 줍니다. Docker 자체는 호스트에 남습니다.
+
 ## 한계
 
 - 인증이 없습니다. 이력서 전문이 저장되고, `/match/{id}`는 순차 정수 id를 쓰며, CORS는 모든 출처를 허용합니다. 민감한 이력서는 올리지 마세요.

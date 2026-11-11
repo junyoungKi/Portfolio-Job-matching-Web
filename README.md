@@ -76,7 +76,7 @@ flowchart LR
 
 ## Design choices
 
-- **Async I/O.** The database uses SQLAlchemy's async engine, OpenAI uses `AsyncOpenAI`, and the match cache uses one `redis.asyncio` client created at startup. PDF parsing is synchronous, so it runs in a worker thread. A semaphore of 10 limits concurrent upload parse/embed work. OpenAI calls from `/match` and from the crawler share a semaphore of 8. Cache commands use a 5 second socket timeout.
+- **Async I/O.** The database uses SQLAlchemy's async engine, OpenAI uses `AsyncOpenAI`, and the match cache uses one `redis.asyncio` client created at startup. PDF parsing is synchronous, so it runs in a worker thread. A semaphore of 10 wraps each upload's parse and embedding. Korean/English match analyses and the crawler's metadata and embedding calls share a semaphore of 8. The rerank call is not under that semaphore. Cache commands use a 5 second socket timeout.
 - **Retrieve, then rerank.** Vector search returns up to 100 candidates. The LLM reorders them. The rerank sees a short resume excerpt, which costs less and can miss detail later in the file.
 - **Cache plus stored analyses.** Match JSON is cached for 1 hour per resume and filter set, so a cached response can be up to an hour old. Stored analyses are reused until the resume row is deleted.
 - **Resume de-duplication.** An MD5 of resume text plus location is stored in `search_keyword`. Re-uploading the same combination while that row exists returns the existing id and does not embed again. After the row is deleted, a later upload is embedded again. Crawled postings store the crawl keyword in that column (currently `Software Engineer`).

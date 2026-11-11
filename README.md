@@ -15,7 +15,7 @@ Job boards match on keywords, so a resume has to be compared with postings by ha
 
 - Upload a PDF resume with a location (one city, or "North America" for every hub city).
 - Text extraction with PyMuPDF, then a 1536-dimension embedding (`text-embedding-3-small`).
-- Cosine-distance search over stored postings (top 100 candidates), optionally filtered by experience level, employment type, and skills. The query orders by the distance operator, which is the form the HNSW index can use. `hnsw.ef_search` is set to 100 for that transaction. This README does not include an `EXPLAIN` from the live database.
+- Cosine-distance search over stored postings (top 100 candidates), optionally filtered by experience level, employment type, and skills. HNSW search is working: startup creates `ix_job_postings_embedding_hnsw` (`vector_cosine_ops`, `m=16`, `ef_construction=64`), and `/match` orders by cosine distance with `hnsw.ef_search` set to 100 for that transaction.
 - LLM re-ranking (`gpt-4o-mini`) using the resume's first 500 characters and each job's title, company, and skills. If that call fails, the vector-similarity order is used. The response is the first 10 of that order.
 - Per-result summary and analysis in Korean and English. A pair that is not already stored is generated once (both languages in one concurrent batch, resume and job text truncated to 1000 characters) and saved in `match_analyses`.
 - Redis cache of match results (1 hour TTL). If Redis is unreachable, the request skips the cache and still runs the search.
@@ -124,7 +124,9 @@ Without `frontend/dist`, `/` serves the legacy UI. API docs: `/docs`.
 
 Tests in `test_cleanup.py`, `test_crawl_batch.py`, `test_crawl_dedup.py`, `test_crawl_timeout.py`, `test_match_hnsw.py`, and `test_match_redis.py` exercise cleanup SQL, crawl dedup and deadlines, and the match query and cache with fakes. They do not need a live database. Nothing in `.github/workflows/` runs them; the only workflow deploys `main`. `python test_concurrent.py` and `locust -f locustfile.py` are manual and expect a running server.
 
-The Locust file sends `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, waiting 1–3 seconds between tasks. It does not call `/match/{id}`. The same file and location hit resume-hash de-duplication after the first upload, so the script does not repeat the embedding call. A screenshot of one async-version run is at `docs/images/locust-after-async.jpeg`. This README does not quote request rate or latency from that image, and there is no measured pre-async baseline.
+The Locust file sends `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, waiting 1–3 seconds between tasks. It does not call `/match/{id}`. The same file and location hit resume-hash de-duplication after the first upload, so the script does not repeat the embedding call. One run is charted below (requests per second, failures per second, 50th and 95th percentile response time, and user count). The chart does not print RPS or latency values, so none are quoted here. There is no measured pre-async baseline.
+
+![Locust run: requests per second, response times, and user count](job_matching_web_locustTest.png)
 
 ## Run with Docker Compose
 
@@ -229,7 +231,7 @@ Rollback: check out a previous commit, `docker rm -f` the current `web` and `cad
 
 The crawler searches LinkedIn for `Software Engineer` in eight cities: Vancouver, Toronto, Seattle, San Francisco, Austin, New York, Los Angeles, and Montreal. Each city is one results page (the URL steps by 25, with `f_TPR=r604800`, the past week). Detail pages are opened for the description. A card is stored only when its LinkedIn job id is not already stored. A card with no id, and a row stored with no id, fall back to normalized title, company, and location. The same title at the same company in another city is stored when the ids differ. `created_at` is set once, when the row is inserted. A later duplicate does not refresh it. Salary is always the placeholder `Competitive Salary`.
 
-One crawl at a time (`max_instances=1`). Each city has a deadline of 1200 seconds and the whole run has a deadline of 18000 seconds (both overridable by env). A timed-out or failed city does not stop the next city. The scheduler prints a `[BATCH]` line per city with collected, saved, skipped, and failed counts, then a run total. This README does not claim a specific live run finished every city.
+One crawl at a time (`max_instances=1`). Each city has a deadline of 1200 seconds and the whole run has a deadline of 18000 seconds (both overridable by env). A timed-out or failed city does not stop the next city. The scheduler prints a `[BATCH]` line per city with collected, saved, skipped, and failed counts, then a run total. A full pass of all eight cities has been verified: the scheduled run finishes on its 6-hour interval.
 
 Once a day, at midnight in the process timezone, crawled rows with `created_at` older than 30 days are deleted. `USER_UPLOAD` rows are not part of that delete. Because duplicates do not reset `created_at`, a posting leaves the table 30 days after it was first saved even if LinkedIn still shows it. It can be inserted again only if a later crawl still sees it on that one past-week page. When most cards on the page are already stored, daily inserts are small. If the rows turning 30 days old outnumber those inserts, `total_jobs` falls. That is the retention rule, not a second delete path.
 
@@ -253,5 +255,5 @@ Caddyfile       Origin TLS reverse proxy (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem and origin-key.pem (gitignored; see README.txt)
 deploy/lightsail.sh  Lightsail deploy script run by GitHub Actions
 locustfile.py   Manual load script
-docs/images/    Locust screenshot
+job_matching_web_locustTest.png  Locust chart for one run
 ```

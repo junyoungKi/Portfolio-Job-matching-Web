@@ -1,43 +1,28 @@
-<!--
-  Author: Joonyoung Ki
-
-  Project README (English): Portfolio-Job-matching-Web (Smart Job AI), an AI-powered resume-to-job matching service.
-  Every statement here was checked against the code on main. Items marked TODO(owner) need to be filled in or verified.
--->
-
 **English** | [한국어](README.ko.md)
 
 # Smart Job AI (Portfolio-Job-matching-Web)
 
 Upload a PDF resume and get the top 10 North American software job postings, ranked by embedding similarity and re-ranked by an LLM, with a short match analysis in Korean and English.
 
-Built by Joonyoung Ki, a CS undergraduate (international student in the US). Target roles: backend / general software engineering.
+Built by Joonyoung Ki, a CS undergraduate (international student in the US). Target roles: backend / general software engineering. This is a personal portfolio project, not a production service.
 
 - Live demo: <https://ai-job-matching.com>
 - Repo: <https://github.com/junyoungKi/Portfolio-Job-matching-Web>
 
-## Problem
+Job boards match on keywords, so a resume has to be compared with postings by hand. This project parses the resume, compares its meaning against collected postings with vector search, and explains why each result fits.
 
-Job boards match on keywords, so a resume has to be compared with postings by hand. This project parses the resume, compares its meaning against collected postings with vector search, and explains why each result fits. It is a personal portfolio project, not a production service.
+## What is implemented
 
-## Demo
-
-<!-- DEMO SCREENSHOT/GIF: insert here -->
-
-<!-- ![Dashboard demo](docs/images/demo.gif) -->
-
-TODO(owner): add a screenshot or GIF at `docs/images/demo.gif` (upload resume, filters, results with analysis).
-
-## What it does (shipped on `main`)
-
-- Upload a PDF resume with a location (a single city, or "North America" for all hub cities).
+- Upload a PDF resume with a location (one city, or "North America" for every hub city).
 - Text extraction with PyMuPDF, then a 1536-dimension embedding (`text-embedding-3-small`).
-- Cosine-similarity search over stored postings (top 100 candidates), optionally filtered by experience level, employment type and skills.
-- LLM re-ranking (`gpt-4o-mini`) of the candidates; the top 10 are returned.
-- Per-result summary and detailed analysis in both Korean and English, generated once per resume/job pair and stored.
-- Redis cache of match results (1 hour TTL); caching is skipped if Redis is unreachable.
-- Background jobs: LinkedIn crawl every 6 hours with AI-based tagging, daily deletion of crawled postings older than 30 days, and deletion of uploaded resumes older than 1 hour.
-- React dashboard (Korean/English UI, light/dark theme) served by FastAPI; the older static UI stays at `/legacy`.
+- Cosine-distance search over stored postings (top 100 candidates), optionally filtered by experience level, employment type, and skills. The query orders by the distance operator, which is the form the HNSW index can use. `hnsw.ef_search` is set to 100 for that transaction. This README does not include an `EXPLAIN` from the live database.
+- LLM re-ranking (`gpt-4o-mini`) using the resume's first 500 characters and each job's title, company, and skills. If that call fails, the vector-similarity order is used. The response is the first 10 of that order.
+- Per-result summary and analysis in Korean and English. A pair that is not already stored is generated once (both languages in one concurrent batch, resume and job text truncated to 1000 characters) and saved in `match_analyses`.
+- Redis cache of match results (1 hour TTL). If Redis is unreachable, the request skips the cache and still runs the search.
+- Background jobs, in the FastAPI process: LinkedIn crawl every 6 hours (first run about 5 seconds after startup), daily deletion of crawled postings older than 30 days, and deletion of uploaded resumes older than 1 hour (every 10 minutes), including their match analyses.
+- React dashboard (Korean/English UI, light/dark theme) served by FastAPI. The older static UI stays at `/legacy`.
+
+Resumes and job postings share `job_postings`. Resumes are rows with `company = "USER_UPLOAD"`.
 
 ## Architecture
 
@@ -49,13 +34,13 @@ flowchart LR
     API -->|store resume as USER_UPLOAD row| DB[(PostgreSQL + pgvector)]
     U -->|GET /match/id| API
     API <-->|cache, TTL 1h| R[(Redis)]
-    API -->|cosine search, top 100<br/>HNSW index on embedding| DB
+    API -->|cosine distance, top 100<br/>HNSW index on embedding| DB
     API -->|rerank candidates<br/>gpt-4o-mini| L[OpenAI chat]
-    API -->|KO/EN analysis, cached in match_analyses| L
+    API -->|KO/EN analysis, stored in match_analyses| L
     API -->|top 10 JSON| U
 ```
 
-Scheduled pipeline (APScheduler, runs inside the FastAPI process):
+Scheduled pipeline (APScheduler):
 
 ```mermaid
 flowchart LR
@@ -64,78 +49,42 @@ flowchart LR
     D -->|yes| X[Skip]
     D -->|no| T[gpt-4o-mini: type, level, top skills<br/>+ embedding]
     T --> DB[(PostgreSQL + pgvector)]
-    S2[Daily at 00:00] --> CL[Delete crawled postings older than 30 days]
+    S2[Daily at 00:00<br/>process local time] --> CL[Delete crawled postings older than 30 days]
     S3[Every 10 minutes] --> RL[Delete USER_UPLOAD resumes older than 1 hour<br/>and their match analyses]
     CL --> DB
     RL --> DB
 ```
 
-Resumes and job postings share one table (`job_postings`); resumes are rows with `company = "USER_UPLOAD"`, so both live in the same embedding space.
+`GET /stats` counts rows with `company != "USER_UPLOAD"`. Uploaded resumes are not in that number.
 
-## Tech stack and why
+## Tech stack
 
-| Component                                        | Used for                                | Why                                                                                       |
-| ------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------- |
-| FastAPI + uvicorn                                | REST API, serves the built dashboard    | Native async, simple request handling and typed query params                              |
-| SQLAlchemy (async) + asyncpg                     | Database access                         | Non-blocking DB calls inside async handlers                                               |
-| PostgreSQL + pgvector                            | Postings, resumes, embeddings, analyses | One database for relational filters and vector search, no separate vector store           |
-| HNSW index (`vector_cosine_ops`)                 | Similarity search                       | Approximate nearest-neighbour search that scales better than a full scan as postings grow |
-| Redis                                            | Match-result cache                      | Repeat requests skip the vector search and LLM calls                                      |
-| OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) | Embeddings, tagging, rerank, analysis   | Hosted models; no model serving to maintain                                               |
-| Playwright (Chromium)                            | Crawler                                 | LinkedIn pages need a real browser to render                                              |
-| APScheduler                                      | Crawl and cleanup schedule              | In-process scheduling, no extra service                                                   |
-| PyMuPDF                                          | PDF text extraction                     | Fast, no external dependency                                                              |
-| React 19 + TypeScript + Vite + Tailwind          | Dashboard (`frontend/`)                 | Typed UI with fast builds                                                                 |
-| Docker (multi-stage) + Docker Compose            | Packaging and deployment                | Node builds the frontend; only `dist` ships in the Python image                           |
-| Locust                                           | Load testing                            | Python-based, easy to script against the API                                              |
+| Component | Used for | Why |
+| --- | --- | --- |
+| FastAPI + uvicorn | REST API, serves the built dashboard | Async handlers and typed query params |
+| SQLAlchemy (async) + asyncpg | Database access | Non-blocking DB calls |
+| PostgreSQL + pgvector | Postings, resumes, embeddings, analyses | Relational filters and vector search in one database |
+| HNSW index (`vector_cosine_ops`, `m=16`, `ef_construction=64`) | Similarity search | Approximate nearest-neighbour search as the table grows |
+| Redis | Match-result cache | Repeat requests skip the vector search and LLM calls |
+| OpenAI (`text-embedding-3-small`, `gpt-4o-mini`) | Embeddings, tagging, rerank, analysis | Hosted models |
+| Playwright (Chromium) | Crawler | LinkedIn pages need a browser to render |
+| APScheduler | Crawl and cleanup | In-process scheduling |
+| PyMuPDF | PDF text extraction | No separate parser service |
+| React 19 + TypeScript + Vite + Tailwind | Dashboard (`frontend/`) | Typed UI |
+| Docker (multi-stage) + Docker Compose | Packaging and deployment | Node builds the frontend; the Python image ships `dist` only |
+| Locust | Manual load script | Scripted against the API |
 
-## Key design decisions and trade-offs
+## Design choices
 
-- **Async end to end.** The DB layer uses SQLAlchemy's async engine with asyncpg, OpenAI calls use `AsyncOpenAI`, and the match cache uses one `redis.asyncio` client created during application startup. PDF parsing is synchronous, so it runs in a thread executor to keep the event loop free. A semaphore (10) limits concurrent parse/embed work. Cache commands use a 5 second socket timeout so a stalled Redis cannot hold a request open indefinitely.
-- **HNSW index.** Declared in `app/models.py` with `m=16`, `ef_construction=64` and cosine ops. HNSW is approximate and uses more memory and build time than a plain scan; it pays off only with many postings. Whether the planner uses it for the current `/match` query (it orders by a computed `1 - cosine_distance` score) is not confirmed: TODO(owner): run `EXPLAIN ANALYZE` and record the result.
-- **Retrieve, then rerank.** Vector search narrows to 100 candidates cheaply; the LLM then orders them using the resume's first 500 characters and each job's title, company and skills. If the LLM call fails, the vector-similarity order is used. Trade-off: extra latency and cost per request, and the rerank sees only a short resume excerpt.
-- **Redis cache plus stored analyses.** Match results are cached for 1 hour per resume and filter combination. KO/EN analyses are stored in `match_analyses` so each pair is generated only once. Trade-off: cached results can be up to an hour stale.
-- **Resume de-duplication.** An MD5 of resume text + location is stored in `search_keyword`; re-uploading the same combination while that row still exists returns the existing record without re-embedding. After the row is deleted, a later upload is embedded again. Crawled postings still store the crawl keyword (for example "Software Engineer") in that column.
-- **Single table for resumes and postings.** Simple to compare; the cost is that every query on postings must exclude `USER_UPLOAD` rows.
-
-## Performance
-
-The load test (`locustfile.py`) sends two request types: `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, with 1-3 s wait between tasks. It does **not** call `/match/{id}`.
-
-Because every upload uses the same file and location, requests after the first should hit the content-hash de-duplication path and skip the embedding call. The numbers below therefore reflect parsing, DB access and the upload path, not repeated OpenAI calls.
-
-<!-- LOCUST GRAPH: insert here (path: docs/images/locust-after-async.png) -->
-
-![Locust report, async version](docs/images/locust-after-async.jpeg)
-
-TODO(owner): confirm this image is the run you want to publish for the async version (it was previously `job_matching_web_locustReport.jpeg` in the repo root). If you prefer a different graph, save it as `docs/images/locust-after-async.png` and update the line above.
-
-| Metric (async version, 100 users)                             | Result      |
-| ------------------------------------------------------------- | ----------- |
-| Requests per second                                           | TODO(owner) |
-| p50 latency                                                   | TODO(owner) |
-| p95 latency                                                   | TODO(owner) |
-| Failure rate                                                  | TODO(owner) |
-| Test environment (machine, where the server ran, DB location) | TODO(owner) |
-| Locust version, run duration, spawn rate                      | TODO(owner) |
-
-<!-- The report image appears to show: 100 users, 3431 requests, 0 failures, ~44.9 aggregated RPS, p50 57 ms, p95 430 ms. Copy into the table only after confirming the run. -->
-
-**Baseline not measured.** There is no load-test result for the pre-async version, so this README makes no before/after improvement claim.
-
-Other numbers not measured yet:
-
-| Item                                   | Result                     |
-| -------------------------------------- | -------------------------- |
-| Recommendation quality (Hit@10 / NDCG) | TODO(owner)                |
-| `/match` latency (cold, cached)        | TODO(owner)                |
-| Vector query time with/without HNSW    | TODO(owner)                |
-| Stored postings count (`GET /stats`)   | TODO(owner)                |
-| Users                                  | TODO(owner) (none claimed) |
+- **Async I/O.** The database uses SQLAlchemy's async engine, OpenAI uses `AsyncOpenAI`, and the match cache uses one `redis.asyncio` client created at startup. PDF parsing is synchronous, so it runs in a worker thread. A semaphore of 10 limits concurrent upload parse/embed work. OpenAI calls from `/match` and from the crawler share a semaphore of 8. Cache commands use a 5 second socket timeout.
+- **Retrieve, then rerank.** Vector search returns up to 100 candidates. The LLM reorders them. The rerank sees a short resume excerpt, which costs less and can miss detail later in the file.
+- **Cache plus stored analyses.** Match JSON is cached for 1 hour per resume and filter set, so a cached response can be up to an hour old. Stored analyses are reused until the resume row is deleted.
+- **Resume de-duplication.** An MD5 of resume text plus location is stored in `search_keyword`. Re-uploading the same combination while that row exists returns the existing id and does not embed again. After the row is deleted, a later upload is embedded again. Crawled postings store the crawl keyword in that column (currently `Software Engineer`).
+- **One table for resumes and postings.** Comparisons stay in one embedding space. Queries for jobs exclude `USER_UPLOAD`.
 
 ## Run locally
 
-Requirements: Python 3.11 (as in the Dockerfile), PostgreSQL with the `pgvector` extension, an OpenAI API key, Node 20.19+ or 22 (only to build the dashboard). Redis is optional.
+Requirements: Python 3.11 (the Dockerfile version), PostgreSQL with the `vector` extension, an OpenAI API key, and Node 22 to build the dashboard. Redis is optional.
 
 ```bash
 git clone https://github.com/junyoungKi/Portfolio-Job-matching-Web.git
@@ -153,25 +102,29 @@ DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/job_match
 REDIS_HOST=localhost        # optional; the default host name is "redis" (Docker Compose)
 ```
 
-Start the backend. On startup it enables the `vector` extension, creates tables, and the first crawl starts about 5 seconds later.
+On startup the app enables the `vector` extension, creates missing tables, and the first crawl starts about 5 seconds later.
 
 ```bash
 python run.py               # http://127.0.0.1:8000  (or: uvicorn app.main:app --port 8000)
 ```
 
-Dashboard, either mode:
+Dashboard:
 
 ```bash
-# A) Development: Vite dev server proxies the API (http://localhost:5173)
+# A) Development: Vite proxies the API (http://localhost:5173)
 cd frontend && npm ci && npm run dev
 
 # B) Production-like: build, then FastAPI serves frontend/dist at /
 cd frontend && npm ci && npm run build && cd .. && python run.py
 ```
 
-Without `frontend/dist`, `/` falls back to the legacy UI. API docs: `/docs`. Load test: `locust -f locustfile.py`.
+Without `frontend/dist`, `/` serves the legacy UI. API docs: `/docs`.
 
-Note: `seed_jobs.py` imports a `SessionLocal` that no longer exists in `app/database.py`, so it does not run on `main`; wait for the crawler or insert postings another way.
+`seed_jobs.py` imports `SessionLocal`, which is not defined in `app/database.py` (`AsyncSessionLocal` is). It does not run on `main`. Wait for the crawler, or insert postings another way.
+
+Tests in `test_cleanup.py`, `test_crawl_batch.py`, `test_crawl_dedup.py`, `test_crawl_timeout.py`, `test_match_hnsw.py`, and `test_match_redis.py` exercise cleanup SQL, crawl dedup and deadlines, and the match query and cache with fakes. They do not need a live database. Nothing in `.github/workflows/` runs them; the only workflow deploys `main`. `python test_concurrent.py` and `locust -f locustfile.py` are manual and expect a running server.
+
+The Locust file sends `GET /stats` (weight 2) and `POST /process-resume` (weight 1) with `test_resume.pdf` and `location=North America`, waiting 1–3 seconds between tasks. It does not call `/match/{id}`. The same file and location hit resume-hash de-duplication after the first upload, so the script does not repeat the embedding call. A screenshot of one async-version run is at `docs/images/locust-after-async.jpeg`. This README does not quote request rate or latency from that image, and there is no measured pre-async baseline.
 
 ## Run with Docker Compose
 
@@ -185,51 +138,51 @@ docker compose up -d --build
 # http://localhost redirects to HTTPS; https://localhost is the Caddy proxy
 ```
 
-`docker-compose.yml` starts `web`, `redis`, and `caddy`. It does not start PostgreSQL; you supply the database through `DATABASE_URL`. `caddy` publishes `"80:80"` and `"443:443"`, redirects port 80 to HTTPS, and reverse-proxies to the `web` service on port 8000 over the compose network. `web` publishes `"8000:8000"` for on-host checks and does not publish `"80:8000"`. The Dockerfile is multi-stage: Node 22 builds the React app into the image, and Python 3.11 runs FastAPI with uvicorn (Chromium is included for the crawler).
+`docker-compose.yml` starts `web`, `redis`, and `caddy`. It does not start PostgreSQL. `caddy` publishes `80:80` and `443:443`, redirects port 80 to HTTPS, and reverse-proxies to `web:8000`. `web` publishes `8000:8000`. The Dockerfile is multi-stage: Node 22 builds the React app, and Python 3.11 runs FastAPI with uvicorn. Chromium is installed for the crawler. The image is how the same toolchain runs on another machine; the host still needs Docker, and Postgres stays at `DATABASE_URL`. `.env` and `deploy/certs/` are not baked into the image.
 
-The certificate mounted on 443 is a Cloudflare Origin Certificate. Cloudflare trusts it. Browsers and curl do not, so an on-host check uses `curl -k`. Visitors see Cloudflare's public certificate, not this one.
+The certificate on 443 is a Cloudflare Origin Certificate. Cloudflare trusts it. Browsers and curl do not, so an on-host check uses `curl -k`. Visitors see Cloudflare's public certificate.
 
 ## Deployment (AWS Lightsail)
 
-Production runs on an AWS Lightsail instance with docker-compose 1.29.2. Compose starts `web`, `redis`, and `caddy`. `web` is FastAPI served by uvicorn, and the React app is built into the image. `caddy` terminates TLS with a Cloudflare Origin Certificate and proxies to `web`. Instance size and region: TODO(owner).
+Production runs on an AWS Lightsail instance with docker-compose 1.29.2. Compose starts `web`, `redis`, and `caddy`. Public site: <https://ai-job-matching.com>.
 
-Public site: <https://ai-job-matching.com>
-
-Cloudflare proxies the domain (orange-cloud A record for `https://ai-job-matching.com`) and redirects HTTP to HTTPS (Always Use HTTPS). Visitors use HTTPS. Cloudflare terminates the public certificate. SSL/TLS mode is set to Full (strict). That mode encrypts the visitor path and the Cloudflare-to-Lightsail path, so resume files (personal data, even before accounts exist) and a later login's credentials are not sent in cleartext on those hops. The origin uses a Cloudflare Origin Certificate on port 443.
-
-Do these steps in order. Switching Cloudflare to Full (strict) before origin port 443 answers causes error 525.
+Cloudflare proxies the domain and redirects HTTP to HTTPS. SSL/TLS mode is Full (strict): Cloudflare terminates the public certificate, and the origin serves a Cloudflare Origin Certificate on port 443. Switching Cloudflare to Full (strict) before origin port 443 answers causes error 525. Do these steps in order:
 
 1. Put the origin certificate on the server.
 2. Start the proxy.
-3. Confirm `https://127.0.0.1` (origin port 443) works.
+3. Confirm `https://127.0.0.1` works.
 4. Open Lightsail TCP 443.
 5. Set Cloudflare SSL/TLS to Full (strict).
 
-After step 2, host port 80 redirects to HTTPS. While Cloudflare is still on Flexible it connects to the origin over HTTP, so the public site can redirect-loop until step 5. Finish steps 3–5 as soon as the on-host HTTPS check passes.
+After step 2, host port 80 redirects to HTTPS. While Cloudflare is still on Flexible it connects to the origin over HTTP, so the public site can redirect-loop until step 5.
 
 ### Origin certificate
 
-In the Cloudflare dashboard for this zone: SSL/TLS → Origin Server → Create Certificate.
+In the Cloudflare dashboard: SSL/TLS → Origin Server → Create Certificate.
 
-- Hostnames: `ai-job-matching.com` and `*.ai-job-matching.com` (that pair covers www and the apex; listing `ai-job-matching.com` and `www.ai-job-matching.com` is enough if you do not need other names).
+- Hostnames: `ai-job-matching.com` and `*.ai-job-matching.com`.
 - Certificate key format: PEM.
-- Keep the default validity unless you need a shorter one. Cloudflare shows the private key once.
+- Cloudflare shows the private key once.
 
 On the server, from the repo root:
 
 ```bash
 mkdir -p deploy/certs
 # Paste the Origin Certificate into origin.pem and the Private Key into origin-key.pem.
-# Example filenames (both gitignored): deploy/certs/origin.pem, deploy/certs/origin-key.pem
+# Both paths are gitignored: deploy/certs/origin.pem, deploy/certs/origin-key.pem
 chmod 644 deploy/certs/origin.pem
 chmod 600 deploy/certs/origin-key.pem
 ```
 
-`deploy/certs/` is gitignored except `.gitignore` and `README.txt`. Do not commit the certificate or the private key. The files have to exist before `up`. If they are missing, Docker creates directories at those paths; remove the directories and put the PEM files back.
+`deploy/certs/` is gitignored except `.gitignore` and `README.txt`. If the PEM files are missing, Docker creates directories at those paths; remove the directories and put the files back.
 
 ### Deploy
 
-Merging to `main` is the deploy. `.github/workflows/deploy.yml` runs on a GitHub-hosted runner, SSHs to the Lightsail server, and runs `deploy/lightsail.sh`. The script resets the checkout to `origin/main`, builds the `web` image, and removes the `web`, `caddy`, and `redis` containers before `docker-compose up -d`. docker-compose 1.29.2 raises `KeyError: 'ContainerConfig'` when it recreates an existing container. PR #23 added `restart: unless-stopped` on redis, `up` tried to recreate it, and the failed recreate left the site down because `web` and `caddy` had already been removed. Redis is only the `/match` cache (`match_results:*` in `app/main.py`, one-hour TTL, no compose volume), so removing that container clears the cache and the next uncached `/match` recomputes it. Postgres and `deploy/certs` stay (`git reset --hard` leaves gitignored files; the script does not `git clean` or run `docker-compose down`). A future compose-config change on redis hits the same KeyError unless the script still removes the redis container before `up`. The job fails if that script fails. One-time setup is three repository Actions secrets, plus the matching public key in the server user's `~/.ssh/authorized_keys`:
+A push to `main` runs `.github/workflows/deploy.yml`. The job SSHs to the instance and runs `deploy/lightsail.sh`. The script checks out `origin/main`, removes the `web`, `caddy`, and `redis` containers, then runs `docker-compose up -d --build`. It does not run `git clean` or `docker-compose down`, so gitignored certs and Postgres stay. Redis has no volume; removing it clears the match cache only (`match_results:*`, one-hour TTL).
+
+docker-compose 1.29.2 raises `KeyError: 'ContainerConfig'` when it recreates an existing container. The script removes `web`, `caddy`, and `redis` before `up` so Compose creates them instead of recreating them. Do not use `docker-compose down` or `down -v`.
+
+Repository Actions secrets (and the matching public key in the server user's `~/.ssh/authorized_keys`):
 
 - `LIGHTSAIL_HOST`: public IP or DNS of the instance
 - `LIGHTSAIL_USER`: `ubuntu`
@@ -237,20 +190,11 @@ Merging to `main` is the deploy. `.github/workflows/deploy.yml` runs on a GitHub
 
 Do not commit the private key, the public IP, or any secret value.
 
-To update the instance by hand:
+To update the instance by hand, from the repo directory, remove the project containers and then start them. Unquoted ids so every id from the filter is removed:
 
 ```bash
 cd ~/Portfolio-Job-matching-Web
 git fetch origin && git checkout main && git pull
-
-# docker-compose 1.29.2 raises KeyError: 'ContainerConfig' when it recreates an
-# existing container. A failed recreate renames the old one (for example
-# 80209f74697e_portfolio-job-matching-web_redis_1) and aborts, so the rest of
-# `up` never runs. Remove web, caddy, and redis, including those renamed
-# leftovers, before up. Redis is only the match cache; this clears it.
-# Do not use `docker-compose down` or `down -v`.
-# A future compose-config change on redis repeats the KeyError unless redis is
-# removed here before up. Unquoted ids so every container id is removed.
 ids=$(docker ps -aq --filter name=portfolio-job-matching-web)
 if [ -n "$ids" ]; then docker rm -f $ids; fi
 docker-compose up -d --build
@@ -258,7 +202,7 @@ docker-compose logs -f web             # wait for "Application startup complete"
 curl -sf http://127.0.0.1:8000/stats
 ```
 
-Confirm origin TLS on the instance before changing Cloudflare:
+Confirm origin TLS before changing Cloudflare:
 
 ```bash
 curl -s localhost:8000/stats                 # {"total_jobs": N}
@@ -267,11 +211,9 @@ curl -skI https://127.0.0.1/ | head -1       # 200 via Caddy (-k: Origin CA is n
 curl -sI http://127.0.0.1/ | head -1         # 301 to https://127.0.0.1/
 ```
 
-Open Lightsail TCP 443: instance → Networking → IPv4 Firewall → add HTTPS, TCP 443. Leave TCP 80 open so the proxy can redirect it. Do not open host port 8000; that mapping is only for checks on the instance.
+Open Lightsail TCP 443 (Networking → IPv4 Firewall → HTTPS). Leave TCP 80 open so the proxy can redirect it. Do not open host port 8000.
 
 Then set Cloudflare SSL/TLS → Overview to Full (strict).
-
-Verify the public site:
 
 ```bash
 curl -sI https://ai-job-matching.com/ | head -1    # 200
@@ -279,121 +221,27 @@ curl -sI http://ai-job-matching.com/ | head -1     # 301 to https://ai-job-match
 curl -s https://ai-job-matching.com/stats          # {"total_jobs": N}
 ```
 
-Rollback: `git log --oneline -n 10`. While this compose file is still checked out, note the container ids (`docker-compose ps -q web` and `docker-compose ps -q caddy`), check out the previous good commit, `docker rm -f` those ids, then `up -d --build`. Do not use `docker-compose down -v`. The previous compose publishes port 80 on `web`, so caddy must be gone before that `up`. If Cloudflare is already Full (strict), set it back to Flexible only after origin port 80 serves HTTP again; Full (strict) against an HTTP origin returns error 525. `/legacy/` stays available to compare against the old UI.
+Rollback: check out a previous commit, `docker rm -f` the current `web` and `caddy` container ids, then `up -d --build`. Do not use `docker-compose down -v`. An older compose file publishes port 80 on `web`, so `caddy` has to be gone before that `up`. If Cloudflare is already Full (strict), set it back to Flexible only after origin port 80 serves HTTP again.
 
-## Troubleshooting: crawler stopped collecting
+`web`, `redis`, and `caddy` use `restart: unless-stopped`. `faulthandler` is enabled for all threads at import, and `PYTHONUNBUFFERED=1` is set. `UVICORN_LOOP` defaults to `uvloop` (`asyncio` selects the other loop). `DB_TCP_KEEPALIVE` defaults to on (`0` skips the keepalive socket option). On 2026-10-22 the `web` container exited once with SIGSEGV in `libcrypto.so.3` (`OOMKilled` was false). The cause is not known. Those switches are not a demonstrated fix, and this README does not claim a later crash has exercised the restart policy.
 
-On the public site, `GET /stats` (`total_jobs`, crawled rows only, `company <> 'USER_UPLOAD'`) stayed at 1823. In Postgres the latest `job_postings.created_at` for those rows was `2026-10-17 23:03:22`.
+## Job catalog
 
-```sql
-SELECT count(*) AS stats_count, max(created_at) AS latest
-FROM job_postings
-WHERE company <> 'USER_UPLOAD';
-```
+The crawler searches LinkedIn for `Software Engineer` in eight cities: Vancouver, Toronto, Seattle, San Francisco, Austin, New York, Los Angeles, and Montreal. Each city is one results page (the URL steps by 25, with `f_TPR=r604800`, the past week). Detail pages are opened for the description. A card is stored only when its LinkedIn job id is not already stored. A card with no id, and a row stored with no id, fall back to normalized title, company, and location. The same title at the same company in another city is stored when the ids differ. `created_at` is set once, when the row is inserted. A later duplicate does not refresh it. Salary is always the placeholder `Competitive Salary`.
 
-`docker-compose` 1.29.2 has no `--since` on `logs`. The web container log contained:
+One crawl at a time (`max_instances=1`). Each city has a deadline of 1200 seconds and the whole run has a deadline of 18000 seconds (both overridable by env). A timed-out or failed city does not stop the next city. The scheduler prints a `[BATCH]` line per city with collected, saved, skipped, and failed counts, then a run total. This README does not claim a specific live run finished every city.
 
-```text
-Execution of job "scheduled_north_america_crawl (trigger: interval[6:00:00], next run at: 2026-10-21 22:51:29 UTC)" skipped: maximum number of running instances reached (1)
-```
-
-One crawl run never finished. The exact blocking point is unknown (Playwright, OpenAI, or a database wait). `max_instances` is 1, so every later 6-hour tick was skipped while that run was still the running instance.
-
-Immediate recovery was `docker-compose restart web`. That stopped the stuck process. The crawl started again at `2026-10-22 04:18 UTC`. This does not say what the posting count totals.
-
-PR #19 is deployed. It changes the crawl as follows. Each city has a deadline (`CRAWL_CITY_TIMEOUT_SECONDS`, default 1200). The whole run has a deadline under the 6-hour interval (`CRAWL_JOB_TIMEOUT_SECONDS`, default 18000). Playwright launch, navigation, and close, and the OpenAI client, have their own timeouts. The browser is closed in `finally`. A driver crash such as `EPIPE` ends that city and the next city still runs. Each duplicate check and each commit uses its own short session. The pool uses `pool_pre_ping` and `pool_recycle` (default 1800 seconds). Before each slow await the process prints `[BATCH] Step {city} ({keyword}): {step}`. Each city prints collected, saved, skipped, and failed. A deadline prints a `[BATCH] Watchdog` line with the last step. The crawl job sets `coalesce=True` (`max_instances` stays 1). Dedup uses the LinkedIn job id on the card URL when that id is present. Rows stored before `source_job_id` existed, and cards whose URL has no id, fall back to normalized title, company, and location.
-
-After a deploy, on the server:
-
-```bash
-docker-compose logs --tail=200 web
-docker-compose logs --tail=500 web | grep '\[BATCH\]'
-docker-compose logs --tail=200 web | grep 'maximum number of running instances'
-```
-
-Expect `[BATCH] Starting`, then `[BATCH] Step` lines, then one `Collected N cards, saved X, skipped Y (duplicate), failed Z, took T s` line per city, then `[BATCH] Finished`. The `maximum number of running instances` skip line should not appear for that process.
-
-The 05:06 UTC deploy printed `[BATCH] Starting` and `[BATCH] Step` lines. No per-city completion line and no `[BATCH] Finished` were observed before that process exited at 05:12:53 UTC. That is not a completed crawl.
-
-## Troubleshooting: web process segfaulted in OpenSSL
-
-On 2026-10-22 at 05:12:53 UTC the `web` container exited with code 139 (SIGSEGV). `OOMKilled` was false. The host kernel had one segfault line since boot. It named `libcrypto.so.3` on a non-main thread:
-
-```text
-[Thu Oct 22 05:12:53 2026] uvicorn[576578]: segfault at 8 ip 00007121c9b35b6d sp 000071219cff84d0 error 4 in libcrypto.so.3[3ecb6d,7121c9840000+384000] likely on CPU 1
-```
-
-The host stayed up (SSH still worked). Caddy and Redis stayed up. The site was down because nothing restarted `web`: `RestartCount` was 0, and compose had no restart policy. One occurrence so far. It may be a one-off.
-
-Recovery was on the host, from the repo directory: `docker-compose up -d`. Compose printed `Starting ..._web_1 ... done` and started the stopped container. There was no host reboot and no `docker-compose down`. The site came back. The crawl started again 5 seconds later.
-
-Next time, from that directory:
-
-```bash
-docker ps -a
-docker inspect --format 'exit={{.State.ExitCode}} oom={{.State.OOMKilled}} status={{.State.Status}} restarts={{.RestartCount}}' $(docker-compose ps -q -a web)
-sudo dmesg -T | grep -i segfault
-```
-
-`docker-compose` 1.29.2 has no `--since` on `logs`. Start the stopped container again with:
-
-```bash
-docker-compose up -d
-```
-
-Do not run `docker-compose down` or `docker-compose down -v`. `up -d` starts what is stopped and leaves Redis and `deploy/certs` in place.
-
-PR #23 sets `restart: unless-stopped` on `web`, `redis`, and `caddy` in `docker-compose.yml`. Once the host is running that file, Docker starts the container again after any exit, including a crash, unless an operator stopped it. #23 also turns on `faulthandler` at import, so the next fatal signal writes a Python traceback for every thread to stderr, and sets `PYTHONUNBUFFERED=1` so stdout is not block-buffered. Two switches keep the previous behavior unless they are set in the server `.env`: `UVICORN_LOOP=asyncio` (the default is `uvloop`; the value is passed as `--loop`) and `DB_TCP_KEEPALIVE=0` (the default is on; `0` skips the keepalive `setsockopt`). PR #24 fixes the Dockerfile `CMD`. A doubled dollar sign in the shell form reached `sh` as the shell PID and would have broken `--loop`. The corrected command is exec-form `sh -c`, so the variable expands when the container starts.
-
-Not verified: the root cause is unknown. The restart policy has not yet been exercised by a real crash. `UVICORN_LOOP` and `DB_TCP_KEEPALIVE` are not proven fixes.
-
-## Troubleshooting: deploys of #23, #24, and #27 left the site down
-
-This is separate from the segfault above. The root cause of that segfault is still unknown.
-
-The GitHub Actions Deploy runs for PR #23 (commit `ea74e44`, run `39727758001`, 2026-10-22 05:23 UTC) and PR #24 (run `39728690261`) both failed, and the site did not come back. Both died at `Recreating ..._redis_1` with docker-compose 1.29.2 `KeyError: 'ContainerConfig'`. That is a compose v1 bug on recreating an existing container. The logs are `gh run view 39727758001 --log-failed` and `gh run view 39728690261 --log-failed`.
-
-PR #23 added `restart: unless-stopped` to the redis service. That changes redis's config hash, so `docker-compose up -d` tried to recreate redis. `deploy/lightsail.sh` removes only `web` and `caddy` before `up`, so redis was the container compose tried to recreate, and it hit the bug. A failed recreate stops and renames redis. The #24 log shows `80209f74697e_portfolio-job-matching-web_redis_1`. `web` and `caddy` had already been removed by the script, and `up` never recreated them, so the site stayed down. The runs never reached starting `web`.
-
-A compose-config change on redis will do this again unless `deploy/lightsail.sh` removes the redis container before `up`. Do not use `docker-compose down`.
-
-Separate latent bug, found and fixed in PR #24, and not the cause of these failures: the #23 Dockerfile `CMD` was `--loop "$${UVICORN_LOOP:-uvloop}"`. `$$` is a `docker-compose.yml` escape. In a Dockerfile it reaches `sh` as the shell PID, so uvicorn would have been given an invalid `--loop`. PR #24 (merged) uses `sh -c "exec uvicorn ... --loop ${UVICORN_LOOP:-uvloop}"`. The deploys never got as far as starting that command.
-
-The first fix attempts failed too, each for a different reason. PR #26 (remove redis as well before `up`) failed in 11 s: the workflow runs `bash -s < deploy/lightsail.sh`, where `BASH_SOURCE` is empty, and the script's "run only when executed directly" guard hit `BASH_SOURCE[0]: unbound variable` under `set -u`. PR #27 fixed the guard, but its deploy then failed because `docker-compose ps -q` prints 64-character container ids while `docker ps -aq` prints 12-character ones. The same container was passed to `docker rm -f` twice, the second call failed with "removal ... already in progress", and `set -e` ended the script after removal and before `up -d`. The site was down until `docker-compose up -d` was run by hand on the server.
-
-PR #28 lists containers with `docker ps -aq --no-trunc` so ids dedupe, removes one container per call and tolerates one that is already going away, and then checks that none is left. `deploy/test_lightsail_e2e.sh` runs the script through `bash -s` against fake `docker`/`docker-compose` with 64/12-character ids and the compose v1 `ContainerConfig` failure. It fails on the #27 script and passes on the #28 script. The #28 Deploy run (`39731429575`, 2026-10-22 06:02 UTC) succeeded on the Lightsail host: the old containers were removed, redis, web, and caddy were created, and `/stats` returned 200 on the third health check.
-
-Server recovery: the automatic deploy now works (run `39731429575`). The manual `docker-compose up -d` was needed to bring the site back after the failed #23, #24, and #27 deploys.
-
-## Troubleshooting: moving the project to a new computer
-
-This section records why the app is containerized. It is an environment-continuity note for a machine move. It is separate from the later Lightsail deploy failures (#23, #24, and #27) and from the `libcrypto.so.3` segfault. Docker was not added to fix those.
-
-The project moved from a computer in Korea to a new computer after a transfer to a US university. Reinstalling the language runtimes, libraries, and tools, and keeping their versions aligned, was a burden, and the local environment could drift. The image installs those pieces: Python 3.11, Node 22 for the frontend build, Playwright and Chromium (`playwright install chromium --with-deps`), the Python libraries in `requirements.txt`, and the apt packages `build-essential` and `curl`. The app was containerized so the same image runs on any machine that has Docker. That is what kept development continuous across the two machines.
-
-`docker-compose.yml` starts `web`, `redis`, and `caddy`. `web` is built from the Dockerfile. The Node 22 stage builds the React frontend, and the Python 3.11 stage runs the app (FastAPI with uvicorn) with that build copied in as `frontend/dist`. `redis` uses the image `redis:latest`. `caddy` uses `caddy:2`. PostgreSQL is not in the compose file. The database is whatever `DATABASE_URL` in `.env` points to.
-
-`.env`, the secret values in it, and `deploy/certs/` are not baked into the image. `.dockerignore` excludes `.env`, `.env.*`, and `deploy/certs/`. Compose supplies `.env` through `env_file` and mounts `deploy/certs/origin.pem` and `deploy/certs/origin-key.pem` into Caddy. Those files still have to be present on the machine. The host still needs Docker and Docker Compose installed (`docker compose` in the local instructions; `docker-compose` on the Lightsail host). Containerization removes the app toolchain from the host. It does not remove Docker.
+Once a day, at midnight in the process timezone, crawled rows with `created_at` older than 30 days are deleted. `USER_UPLOAD` rows are not part of that delete. Because duplicates do not reset `created_at`, a posting leaves the table 30 days after it was first saved even if LinkedIn still shows it. It can be inserted again only if a later crawl still sees it on that one past-week page. When most cards on the page are already stored, daily inserts are small. If the rows turning 30 days old outnumber those inserts, `total_jobs` falls. That is the retention rule, not a second delete path.
 
 ## Limitations
 
 - No authentication. Resumes are stored as full text, `/match/{id}` uses sequential integer ids, and CORS allows all origins. Do not upload sensitive resumes.
-- Uploaded resumes and their match analyses are deleted after 1 hour. The 30-day cleanup applies to crawled postings only.
-- The crawler searches only for "Software Engineer" in 8 cities and reads one result page (25 cards) per city per run. Matching uses the resume embedding, location, and the level, type, and skill filters.
-- De-duplication uses the LinkedIn job id from the card URL. The same title at the same company in another city is stored when the ids differ. A card with no id, or a row stored with no id, falls back to normalized title, company, and location.
-- Salary is not collected: every crawled posting is stored with the placeholder "Competitive Salary".
-- Scraping LinkedIn can be blocked or break when its HTML changes, and may conflict with its terms of use.
-- PDF only; scanned PDFs without a text layer produce no usable text.
-- Recommendation quality has not been evaluated (no Hit@10 / NDCG), and there are no automated unit tests; `test_concurrent.py` and `locustfile.py` are manual load scripts.
-- Each uncached result triggers two LLM calls (KO and EN), made sequentially.
-
-## Roadmap
-
-- Login / sign-up and a job wishlist (PR #7)
-- Structured salary data and extra job sources (PR #8)
-- PostgreSQL service in Docker Compose (PR #2) and a Redis connection fix for local runs (PR #1)
-
-Not started: an evaluation set for recommendation quality, rate limiting.
+- Uploaded resumes and their match analyses are deleted after 1 hour. Crawled postings are deleted after 30 days.
+- The crawler covers one keyword, eight cities, and one past-week results page per city. Scraping LinkedIn can be blocked or break when the HTML changes, and it may conflict with LinkedIn's terms.
+- Recommendation quality has not been measured. There is no Hit@10 or NDCG, no rate limit, no accounts, no wishlist, and no structured salary. Postgres is not a Compose service.
+- PDF only. A scanned PDF with no text layer produces no usable text. A parse error returns an empty string.
+- An uncached `/match` makes one rerank call, then two analysis calls (Korean and English) for each top result that has no stored analysis. Those analysis calls run concurrently, up to the semaphore of 8.
+- `GET /stats` is the crawled-row count only. It moves as rows age out and as new cards are inserted.
 
 ## Project layout
 
@@ -404,6 +252,6 @@ static/         Legacy UI served at /legacy
 Caddyfile       Origin TLS reverse proxy (Cloudflare Origin Certificate)
 deploy/certs/   origin.pem and origin-key.pem (gitignored; see README.txt)
 deploy/lightsail.sh  Lightsail deploy script run by GitHub Actions
-locustfile.py   Load test
-docs/images/    README images
+locustfile.py   Manual load script
+docs/images/    Locust screenshot
 ```
